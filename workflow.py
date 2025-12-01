@@ -190,22 +190,22 @@ Respond ONLY with valid JSON following the schema.
 
 ## Keywords:
 
-pin_request: 4-6 digit numbers ONLY ("1234", "123456"), OR session_needed context flag
+pin_request: ONLY if message is PURE 4-6 digits ("1234", "5678") - NO TEXT ALLOWED
 create_listing: "satıyorum", "satmak", "satayım", "-um var", "ilan vermek"
 update_listing: "değiştir", "güncelle", "fiyat olsun", "fiyatını yap", "düzenle"
 delete_listing: "sil", "silebilir", "silmek", "silme", "kaldır", "ilanımı iptal", "ilanını sil"
 publish_listing: "onayla", "yayınla", "tamam", "evet", "paylaş"
-search_product: "almak", "arıyorum", "var mı", "bul", "uygun", "ucuz"
+search_product: "almak", "arıyorum", "var mı", "bul", "uygun", "ucuz", "bisiklet" (DEFAULT for queries)
 small_talk: "merhaba", "selam", "teşekkür", "nasılsın", "yardım"
 cancel: "iptal", "vazgeç", "sıfırla", "başa dön" (WITHOUT "ilan" word)
 
 ## Priority:
-1. pin_request (if ONLY 4-6 digits OR session_needed flag)
-2. delete_listing (if "ilan" + "sil")
-3. update_listing (if "ilan" + change words)
-4. publish_listing
-5. create_listing
-6. search_product
+1. search_product (DEFAULT - "var mı" ALWAYS goes here)
+2. create_listing
+3. update_listing
+4. delete_listing (if "ilan" + "sil")
+5. publish_listing
+6. pin_request (ONLY if message is PURE 4-6 digits)
 7. cancel (only if "iptal/vazgeç" WITHOUT "ilan")
 8. small_talk
 
