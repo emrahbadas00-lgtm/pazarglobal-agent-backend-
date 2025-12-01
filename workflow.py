@@ -744,15 +744,27 @@ async def run_workflow(workflow_input: WorkflowInput):
             if not content:
                 continue
             
-            conversation_history.append({
-                "role": role,
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": content
-                    }
-                ]
-            })
+            # CRITICAL: OpenAI Agents SDK uses different content types for user vs assistant
+            if role == "user":
+                conversation_history.append({
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",  # User messages use input_text
+                            "text": content
+                        }
+                    ]
+                })
+            elif role == "assistant":
+                conversation_history.append({
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",  # Assistant messages use output_text!
+                            "text": content
+                        }
+                    ]
+                })
         
         # Add current user message (this is the new message to process)
         conversation_history.append({
