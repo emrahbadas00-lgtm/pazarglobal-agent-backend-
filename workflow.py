@@ -180,32 +180,45 @@ You classify user messages into one of the following marketplace intents.
 Respond ONLY with valid JSON following the schema.
 
 ## Valid Intents:
-- **"create_listing"** → user wants to SELL an item
-- **"update_listing"** → user wants to CHANGE existing listing
+- **"create_listing"** → user wants to SELL an item OR editing a DRAFT listing (not yet published)
+- **"update_listing"** → user wants to CHANGE an EXISTING published listing
 - **"delete_listing"** → user wants to DELETE/REMOVE existing listing
-- **"publish_listing"** → user CONFIRMS listing
+- **"publish_listing"** → user CONFIRMS listing (wants to finalize and publish)
 - **"search_product"** → user wants to BUY or SEARCH
 - **"small_talk"** → greetings, casual conversation
 - **"cancel"** → user cancels operation
 
-## Keywords:
+## CRITICAL CONTEXT RULES:
 
-create_listing: "satıyorum", "satmak", "satayım", "-um var", "ilan vermek"
-update_listing: "değiştir", "güncelle", "fiyat olsun", "fiyatını yap", "düzenle"
-delete_listing: "sil", "silebilir", "silmek", "silme", "kaldır", "ilanımı iptal", "ilanını sil"
-publish_listing: "onayla", "yayınla", "tamam", "evet", "paylaş"
-search_product: "almak", "arıyorum", "var mı", "bul", "uygun", "ucuz", "bisiklet" (DEFAULT for queries)
-small_talk: "merhaba", "selam", "teşekkür", "nasılsın", "yardım"
-cancel: "iptal", "vazgeç", "sıfırla", "başa dön" (WITHOUT "ilan" word)
+### 🔍 If conversation contains "📝 İlan önizlemesi" or "✅ Onaylamak için" or "preview":
+→ User is in DRAFT/PREVIEW mode (listing not yet published)
 
-## Priority:
-1. search_product (DEFAULT - "var mı" ALWAYS goes here)
-2. create_listing
-3. update_listing
-4. delete_listing (if "ilan" + "sil")
-5. publish_listing
-6. cancel (only if "iptal/vazgeç" WITHOUT "ilan")
-8. small_talk
+**In this context:**
+- "fiyat X olsun" → **create_listing** (editing draft)
+- "başlık değiştir" → **create_listing** (editing draft)  
+- "açıklama değiştir" → **create_listing** (editing draft)
+- "onayla" / "yayınla" → **publish_listing** (finalize draft)
+- "iptal" → **cancel**
+
+### 📋 If conversation has NO preview/draft context:
+→ Normal intent classification
+
+**Keywords:**
+- create_listing: "satıyorum", "satmak", "satayım", "-um var", "ilan vermek"
+- update_listing: "değiştir", "güncelle", "fiyat ... yap", "düzenle" + mentions specific listing ID/title
+- delete_listing: "sil", "kaldır", "ilanımı iptal"
+- publish_listing: "onayla", "yayınla" (only if draft exists)
+- search_product: "almak", "arıyorum", "var mı", "bul", "uygun"
+- small_talk: "merhaba", "selam", "teşekkür"
+- cancel: "iptal", "vazgeç", "sıfırla"
+
+## Priority Logic:
+1. **Check conversation history for "📝 İlan önizlemesi"**
+   - If found → "onayla" = publish_listing, edits = create_listing
+2. If user mentions product to sell → create_listing
+3. If user confirms/approves → publish_listing  
+4. If user searches ("var mı") → search_product
+5. Default → small_talk
 
 Respond with JSON only: {"intent": "create_listing"}
 """,
@@ -225,17 +238,28 @@ listingagent = Agent(
     name="ListingAgent",
     instructions="""You are CreateListingAgent of PazarGlobal.
 
-🎯 Your task: PREPARE listing, DO NOT insert to database yet.
+🎯 Your task: PREPARE listing draft, DO NOT insert to database yet.
 
-📋 Extract fields:
+## 📋 WORKFLOW:
+
+### Initial Listing Creation:
+Extract fields from user message:
 - title → product title
-- price → numeric price (call clean_price_tool if text)
+- price → numeric price (call clean_price_tool if text like "900 bin")
 - condition → "new", "used", "refurbished"
 - category → infer from product (Otomotiv, Elektronik, Mobilya, etc.)
 - description → friendly Turkish
-- location → default "Türkiye"
+- location → default "Türkiye" (update if user mentions city)
 - stock → default 1
-- **metadata** → CRITICAL! Extract structured data:
+- **metadata** → CRITICAL! Extract structured data (see below)
+
+### 🔄 Draft Editing (User changes price/title/etc BEFORE publishing):
+If conversation already contains "📝 İlan önizlemesi" (preview):
+- User says: "fiyat 880 bin olsun" → Update price field, generate NEW preview
+- User says: "başlık değiştir" → Update title, generate NEW preview
+- User says: "açıklama değiştir" → Update description, generate NEW preview
+- ALWAYS show updated preview after changes
+- DON'T route to UpdateListingAgent - handle edits yourself!
 
 🔍 METADATA EXTRACTION RULES:
 
@@ -315,12 +339,36 @@ publishagent = Agent(
 "onayla", "yayınla", "tamam", "evet", "onaylıyorum"
 
 📋 Flow:
-1. Check conversation context for prepared listing (title, price, category, metadata, etc.)
-2. If found → call insert_listing_tool with ALL fields INCLUDING metadata
-3. If not found → ask user to create listing first
+1. **CRITICAL**: Search conversation history for "📝 İlan önizlemesi" message
+   - Look for fields: title, price, category, location, metadata, description
+   - Extract ALL fields from the preview message
+   
+2. If preview found → call insert_listing_tool with ALL extracted fields INCLUDING metadata
+   - title: from preview
+   - price: from preview (numeric value)
+   - category: from preview
+   - location: from preview (default "Türkiye")
+   - condition: from preview (default "used")
+   - description: from preview açıklama section
+   - metadata: from preview 🔧 Metadata section (parse JSON)
+   - stock: default 1
+   
+3. If no preview found → "Yayınlanacak bir ilan yok. Önce ürün bilgilerini verin."
 
-⚠️ CRITICAL: Always include metadata field when calling insert_listing_tool!
-Example: insert_listing_tool(title="BMW 320i", price=1250000, category="Otomotiv", metadata={"type": "vehicle", "brand": "BMW", "model": "320i", "year": 2018})
+⚠️ CRITICAL EXAMPLE:
+User sees: "📝 İlan önizlemesi: 📱 2020 Renault Clio benzinli manuel 💰 900000 TL ... 🔧 Metadata: {"type":"vehicle","brand":"Renault"...}"
+User says: "onayla"
+→ You MUST extract all fields from the preview and call:
+insert_listing_tool(
+    title="2020 Renault Clio benzinli manuel",
+    price=900000,
+    category="Otomotiv",
+    location="İstanbul",
+    condition="used",
+    description="...",
+    metadata={"type":"vehicle","brand":"Renault","model":"Clio","year":2020,"fuel_type":"benzin","transmission":"manuel"},
+    stock=1
+)
 
 ✅ Success Response:
 "✅ İlanınız başarıyla yayınlandı!
@@ -335,10 +383,13 @@ Example: insert_listing_tool(title="BMW 320i", price=1250000, category="Otomotiv
 "❌ İlan kaydedilemedi: [error message]
 Lütfen bilgileri kontrol edip tekrar deneyin."
 
-❌ No Pending Listing:
-"Yayınlanacak bir ilan yok. Önce ürün bilgilerini verin."
+❌ No Preview Found:
+"Yayınlanacak bir ilan yok. Önce ürün bilgilerini verin.
 
-🚫 DO NOT use clean_price_tool or search_listings_tool""",
+Örnek: '2020 Renault Clio satıyorum, 900 bin TL'"
+
+🚫 DO NOT use clean_price_tool or search_listings_tool
+🚫 DO NOT ask user for fields again - extract from conversation history!""",
     model="gpt-5.1",
     tools=[mcp1],
     model_settings=ModelSettings(
