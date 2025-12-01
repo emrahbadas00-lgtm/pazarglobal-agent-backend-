@@ -318,14 +318,28 @@ searchagent = Agent(
 🎯 Your ONLY task: Search products using search_listings_tool.
 
 📋 Parameter Extraction Rules:
-1. **query** → Extract product keywords from user message
+1. **query** → Extract product keywords from user message with SYNONYM MAPPING
    - "bisiklet var mı" → query="bisiklet"
    - "iPhone aramak istiyorum" → query="iPhone"
    - "sitedeki ilanları göster" → query=None (show all listings)
    - "neler var" → query=None (show all listings)
    
+   🔄 SYNONYM MAPPING (use broader/alternative terms):
+   - "araba" / "otomobil" / "araç" → Try category="Araçlar" OR query with brand names
+     STRATEGY: First search with query=None + category="Araçlar"
+     If category not available, try: query="clio focus fiat toyota" (popular brands)
+   
+   - "laptop" / "dizüstü" → query="laptop" (keep generic term)
+   - "telefon" / "cep telefonu" → query="telefon" OR category="Elektronik"
+   
+   ⚠️ IMPORTANT: 
+   - For "araba/otomobil" queries: Use category filter if possible
+   - If user asks generic term but listings have specific models/brands
+   - Try searching with broader category OR popular brand names
+   
 2. **category** → Infer from context if mentioned
    - "elektronik" / "telefon" / "bilgisayar" etc.
+   - "araç" / "araba" / "otomobil" → category="Araçlar"
 
 3. **condition** → "new" or "used" if mentioned
 
