@@ -609,16 +609,17 @@ async def run_workflow(workflow_input: WorkflowInput):
         
         # Step 2: Route to appropriate agent
         # TEMPORARILY DISABLED pin_request - causing 500 errors
-        # if intent == "pin_request":
-        #     result = await Runner.run(
-        #         pinrequestagent,
-        #         input=[*conversation_history],
-        #         run_config=RunConfig(trace_metadata={
-        #             "__trace_source__": "agent-builder",
-        #             "workflow_id": "wf_691884cc7e6081908974fe06852942af0249d08cf5054fdb"
-        #         })
-        #     )
-        if intent == "create_listing":
+        if intent == "pin_request":
+            # Fallback to small_talk when PIN is requested but disabled
+            result = await Runner.run(
+                smalltalkagent,
+                input=[*conversation_history],
+                run_config=RunConfig(trace_metadata={
+                    "__trace_source__": "agent-builder",
+                    "workflow_id": "wf_691884cc7e6081908974fe06852942af0249d08cf5054fdb"
+                })
+            )
+        elif intent == "create_listing":
             result = await Runner.run(
                 listingagent,
                 input=[*conversation_history],
