@@ -1,8 +1,8 @@
 # FastAPI and server
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-pydantic==2.5.3
-python-multipart==0.0.6
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.12.3
+python-multipart>=0.0.6
 
 # OpenAI Agents SDK (includes OpenAI client)
 openai-agents>=0.1.0
