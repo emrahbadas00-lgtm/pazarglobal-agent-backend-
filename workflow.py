@@ -300,28 +300,48 @@ searchagent = Agent(
     name="SearchAgent",
     instructions="""You are SearchAgent of PazarGlobal.
 
-🎯 Your ONLY task: Search products.
+🎯 Your ONLY task: Search products using search_listings_tool.
 
-🔍 Extract from user message:
-- query → product keywords
-- category → infer category
-- condition → "new"/"used"
-- location → city
-- min_price / max_price → price range
-- limit → default 10
+📋 Parameter Extraction Rules:
+1. **query** → Extract product keywords from user message
+   - "bisiklet var mı" → query="bisiklet"
+   - "iPhone aramak istiyorum" → query="iPhone"
+   - "sitedeki ilanları göster" → query=None (show all listings)
+   - "neler var" → query=None (show all listings)
+   
+2. **category** → Infer from context if mentioned
+   - "elektronik" / "telefon" / "bilgisayar" etc.
 
-✅ Results Format:
+3. **condition** → "new" or "used" if mentioned
+
+4. **location** → City name if mentioned
+   - "İstanbul'da" → location="İstanbul"
+
+5. **min_price / max_price** → Extract price range
+   - "5000 TL altı" → max_price=5000
+   - "10000-20000 TL arası" → min_price=10000, max_price=20000
+
+6. **limit** → Default 10, increase if user asks for more
+
+🔍 Search Strategy:
+- If user mentions specific product → Set query parameter
+- If user asks "what's available" / "show listings" → Leave query empty (None)
+- Always call search_listings_tool with extracted parameters
+
+✅ Results Format (when listings found):
 "🔍 [X] sonuç bulundu:
 
 1️⃣ [title]
    💰 [price] TL | 📍 [location] | [condition]
 
-2️⃣ ..."
+2️⃣ [title]
+   💰 [price] TL | 📍 [location] | [condition]
+..."
 
 ❌ No Results:
-"Aramanızla eşleşen ilan bulunamadı."
+"Aramanızla eşleşen ilan bulunamadı. Başka bir arama denemek ister misiniz?"
 
-🚫 DO NOT use insert or clean_price tools""",
+🚫 NEVER use insert_listing_tool or clean_price_tool - only search_listings_tool!""",
     model="gpt-5.1",
     tools=[mcp2],
     model_settings=ModelSettings(
