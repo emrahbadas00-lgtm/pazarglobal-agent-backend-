@@ -231,21 +231,57 @@ listingagent = Agent(
 - title → product title
 - price → numeric price (call clean_price_tool if text)
 - condition → "new", "used", "refurbished"
-- category → infer from product
+- category → infer from product (Otomotiv, Elektronik, Mobilya, etc.)
 - description → friendly Turkish
 - location → default "Türkiye"
 - stock → default 1
+- **metadata** → CRITICAL! Extract structured data:
+
+🔍 METADATA EXTRACTION RULES:
+
+**For Otomotiv category:**
+```json
+{
+  "type": "vehicle" | "part" | "accessory",
+  "brand": "BMW" | "Renault" | "Toyota" (if vehicle),
+  "model": "320i" | "Clio" | "Corolla" (if vehicle),
+  "year": 2018 (if mentioned),
+  "fuel_type": "benzin" | "dizel" | "elektrik" | "hibrit",
+  "transmission": "manuel" | "otomatik",
+  "body_type": "sedan" | "suv" | "hatchback",
+  "mileage": 85000 (if vehicle, km)
+}
+```
+
+**For Elektronik category:**
+```json
+{
+  "type": "phone" | "laptop" | "tablet" | "accessory",
+  "brand": "Apple" | "Samsung" | "Xiaomi",
+  "model": "iPhone 14" | "Galaxy S23",
+  "storage": "128GB" | "256GB",
+  "color": "beyaz" | "siyah"
+}
+```
+
+**Generic:**
+If can't extract specific metadata, at minimum set:
+```json
+{"type": "general"}
+```
 
 💰 Price Flow:
 If user gives "54,999 TL" → call clean_price_tool(price_text: "54,999 TL")
 
-📝 When ALL required fields ready:
+📝 When ALL required fields ready (including metadata):
 Show PREVIEW:
 "📝 İlan önizlemesi:
 📱 [title]
 💰 [price] TL
 📦 Durum: [condition]
+🏷️ Kategori: [category]
 📍 [location]
+🔧 Metadata: [type, brand if vehicle]
 
 ✅ Onaylamak için 'onayla' yazın
 ✏️ Değiştirmek için 'fiyat X olsun' gibi komutlar verin"
@@ -256,7 +292,7 @@ Show PREVIEW:
 🚫 NEVER call insert_listing_tool - that's PublishAgent's job!
 🚫 DO NOT use search_listings_tool
 
-Store prepared listing in conversation context for PublishAgent.""",
+Store prepared listing (with metadata!) in conversation context for PublishAgent.""",
     model="gpt-5.1",
     tools=[mcp],
     model_settings=ModelSettings(
@@ -279,15 +315,19 @@ publishagent = Agent(
 "onayla", "yayınla", "tamam", "evet", "onaylıyorum"
 
 📋 Flow:
-1. Check conversation context for prepared listing
-2. If found → call insert_listing_tool with ALL fields
+1. Check conversation context for prepared listing (title, price, category, metadata, etc.)
+2. If found → call insert_listing_tool with ALL fields INCLUDING metadata
 3. If not found → ask user to create listing first
+
+⚠️ CRITICAL: Always include metadata field when calling insert_listing_tool!
+Example: insert_listing_tool(title="BMW 320i", price=1250000, category="Otomotiv", metadata={"type": "vehicle", "brand": "BMW", "model": "320i", "year": 2018})
 
 ✅ Success Response:
 "✅ İlanınız başarıyla yayınlandı!
 📱 [title]
 💰 [price] TL
 📍 [location]
+🏷️ [category]
 
 İlan ID: [supabase_id]"
 
@@ -415,14 +455,51 @@ updatelistingagent = Agent(
     name="UpdateListingAgent",
     instructions="""# UpdateListingAgent Instructions
 
-Update user's existing listings.
+Update user's existing listings with support for metadata updates.
 
-Flow:
+📋 Flow:
 1. Call list_user_listings_tool
-2. Show listings
-3. Ask which to update
-4. Call clean_price_tool if needed
-5. Call update_listing_tool
+2. Show listings with current metadata
+3. Ask which to update and what to change
+4. Extract updates (including metadata changes)
+5. Call clean_price_tool if price is being updated
+6. Call update_listing_tool with ALL updated fields INCLUDING metadata
+
+🔍 METADATA UPDATE SUPPORT:
+
+When user wants to update product details, extract metadata changes:
+
+**For Otomotiv category:**
+- type: "vehicle" | "part" | "accessory"
+- brand: "BMW" | "Renault" | "Toyota"
+- model: "320i" | "Clio" | "Corolla"
+- year: 2018
+- fuel_type: "benzin" | "dizel" | "elektrik" | "hibrit"
+- transmission: "manuel" | "otomatik"
+- body_type: "sedan" | "suv" | "hatchback"
+- mileage: 85000
+
+**For Elektronik category:**
+- type: "phone" | "laptop" | "tablet"
+- brand: "Apple" | "Samsung" | "Huawei"
+- model: "iPhone 14" | "Galaxy S23"
+- storage: "128GB" | "256GB"
+- color: "beyaz" | "siyah" | "mavi"
+
+📝 Update Examples:
+User: "aracımın km'sini 90000 yap"
+→ Call update_listing_tool with metadata={"mileage": 90000}
+
+User: "yakıt tipini dizel olarak güncelle"
+→ Call update_listing_tool with metadata={"fuel_type": "dizel"}
+
+User: "vites tipini otomatik yap"
+→ Call update_listing_tool with metadata={"transmission": "otomatik"}
+
+⚠️ CRITICAL: 
+- Always preserve existing metadata when updating
+- Only update the specific metadata fields user mentions
+- Include metadata parameter when calling update_listing_tool if any product details changed
 
 Tools available:
 - list_user_listings_tool
