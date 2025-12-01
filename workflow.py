@@ -735,10 +735,14 @@ async def run_workflow(workflow_input: WorkflowInput):
         # Build conversation history from previous messages
         conversation_history: list[TResponseInputItem] = []
         
-        # Add previous conversation context if exists
+        # Add previous conversation context if exists (NOT including current message)
         for msg in workflow.get("conversation_history", []):
             role = msg.get("role", "user")
             content = msg.get("content", "")
+            
+            # Skip empty messages
+            if not content:
+                continue
             
             conversation_history.append({
                 "role": role,
@@ -750,7 +754,7 @@ async def run_workflow(workflow_input: WorkflowInput):
                 ]
             })
         
-        # Add current user message
+        # Add current user message (this is the new message to process)
         conversation_history.append({
             "role": "user",
             "content": [
