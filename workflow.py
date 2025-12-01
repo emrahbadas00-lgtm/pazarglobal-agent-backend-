@@ -180,7 +180,6 @@ You classify user messages into one of the following marketplace intents.
 Respond ONLY with valid JSON following the schema.
 
 ## Valid Intents:
-- **"pin_request"** → user needs PIN authentication (always check session first!)
 - **"create_listing"** → user wants to SELL an item
 - **"update_listing"** → user wants to CHANGE existing listing
 - **"delete_listing"** → user wants to DELETE/REMOVE existing listing
@@ -191,7 +190,6 @@ Respond ONLY with valid JSON following the schema.
 
 ## Keywords:
 
-pin_request: ONLY if message is PURE 4-6 digits ("1234", "5678") - NO TEXT ALLOWED
 create_listing: "satıyorum", "satmak", "satayım", "-um var", "ilan vermek"
 update_listing: "değiştir", "güncelle", "fiyat olsun", "fiyatını yap", "düzenle"
 delete_listing: "sil", "silebilir", "silmek", "silme", "kaldır", "ilanımı iptal", "ilanını sil"
@@ -206,8 +204,7 @@ cancel: "iptal", "vazgeç", "sıfırla", "başa dön" (WITHOUT "ilan" word)
 3. update_listing
 4. delete_listing (if "ilan" + "sil")
 5. publish_listing
-6. pin_request (ONLY if message is PURE 4-6 digits)
-7. cancel (only if "iptal/vazgeç" WITHOUT "ilan")
+6. cancel (only if "iptal/vazgeç" WITHOUT "ilan")
 8. small_talk
 
 Respond with JSON only: {"intent": "create_listing"}
