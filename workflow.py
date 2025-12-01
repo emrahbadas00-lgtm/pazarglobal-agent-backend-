@@ -367,8 +367,29 @@ searchagent = Agent(
    💰 [price] TL | 📍 [location] | [condition]
 ..."
 
-❌ No Results:
-"Aramanızla eşleşen ilan bulunamadı. Başka bir arama denemek ister misiniz?"
+❌ No Results - SMART RESPONSE STRATEGY:
+
+**STEP 1:** If user asked generic term ("araba", "otomobil", "araç"):
+→ Try searching with category="Otomotiv" (leave query empty)
+
+**STEP 2:** If category search returns results:
+→ Extract brand names from titles (e.g., "BMW", "Clio", "Jeep")
+→ RESPONSE: "🚗 Otomotiv kategorisinde [X] ilan bulundu:
+
+Hangi marka ilginizi çekiyor?
+• BMW ([count] ilan)
+• Renault Clio ([count] ilan)
+• Jeep ([count] ilan)
+
+Veya 'otomobil listele' yazarak tümünü görebilirsiniz."
+
+**STEP 3:** If category search also returns 0:
+→ "Aramanızla eşleşen ilan bulunamadı. Başka bir arama denemek ister misiniz?"
+
+**IMPORTANT:** 
+- Always try category fallback for generic terms
+- Extract popular brands from results and suggest them
+- Make conversation helpful, not dead-end
 
 🚫 NEVER use insert_listing_tool or clean_price_tool - only search_listings_tool!""",
     model="gpt-5.1",
