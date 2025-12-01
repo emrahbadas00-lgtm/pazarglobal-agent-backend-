@@ -326,15 +326,21 @@ searchagent = Agent(
    
    🔄 CRITICAL: Generic terms like "araba/otomobil/araç"
    - DON'T use as query parameter
-   - Use category="Otomotiv" instead
-   - Example: "araba var mı" → query=None, category="Otomotiv"
-   - Example: "BMW var mı" → query="BMW", category="Otomotiv"
+   - Use category="Otomotiv" + metadata_type="vehicle"
+   - Example: "araba var mı" → query=None, category="Otomotiv", metadata_type="vehicle"
+   - Example: "BMW var mı" → query="BMW", category="Otomotiv", metadata_type="vehicle"
+   - Example: "yedek parça" → category="Otomotiv", metadata_type="part"
    
 2. **category** → ALWAYS infer category from context
    - "araba" / "otomobil" / "araç" → category="Otomotiv"
    - "telefon" / "laptop" → category="Elektronik"
    - "bisiklet" → category="Bisiklet" or query="bisiklet"
    - When in doubt, try category first!
+
+3. **metadata_type** → Filter by listing type (NEW!)
+   - "araba" / "araç" / "otomobil" → metadata_type="vehicle"
+   - "yedek parça" / "aksesuar" → metadata_type="part"
+   - Leave empty for all types
 
 3. **condition** → "new" or "used" if mentioned
 
@@ -346,6 +352,12 @@ searchagent = Agent(
    - "10000-20000 TL arası" → min_price=10000, max_price=20000
 
 6. **limit** → Default 10, increase if user asks for more
+
+7. **metadata_type** → NEW! Filter by type:
+   - User asks "araba" / "araç" → metadata_type="vehicle"
+   - User asks "yedek parça" / "parça" → metadata_type="part"
+   - User asks "aksesuar" → metadata_type="accessory"
+   - Leave None for general searches
 
 🔍 Search Strategy:
 - If user mentions specific product → Set query parameter
