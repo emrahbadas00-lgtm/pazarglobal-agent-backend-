@@ -720,6 +720,7 @@ Tools:
 # Workflow input schema
 class WorkflowInput(BaseModel):
     input_as_text: str
+    conversation_history: list = []  # Previous messages from WhatsApp Bridge
 
 
 # Main workflow runner
@@ -730,17 +731,35 @@ async def run_workflow(workflow_input: WorkflowInput):
     """
     with trace("PazarGlobal"):
         workflow = workflow_input.model_dump()
-        conversation_history: list[TResponseInputItem] = [
-            {
-                "role": "user",
+        
+        # Build conversation history from previous messages
+        conversation_history: list[TResponseInputItem] = []
+        
+        # Add previous conversation context if exists
+        for msg in workflow.get("conversation_history", []):
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            
+            conversation_history.append({
+                "role": role,
                 "content": [
                     {
                         "type": "input_text",
-                        "text": workflow["input_as_text"]
+                        "text": content
                     }
                 ]
-            }
-        ]
+            })
+        
+        # Add current user message
+        conversation_history.append({
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": workflow["input_as_text"]
+                }
+            ]
+        })
         
         # Run guardrails
         guardrails_input_text = workflow["input_as_text"]

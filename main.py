@@ -62,7 +62,11 @@ async def run_agent_workflow(request: AgentRequest):
     
     try:
         # Run workflow using Agents SDK
-        workflow_input = WorkflowInput(input_as_text=request.message)
+        logger.info(f"📚 Conversation history: {len(request.conversation_history)} messages")
+        workflow_input = WorkflowInput(
+            input_as_text=request.message,
+            conversation_history=request.conversation_history
+        )
         result = await run_workflow(workflow_input)
         
         if "error" in result:
