@@ -324,22 +324,17 @@ searchagent = Agent(
    - "sitedeki ilanları göster" → query=None (show all listings)
    - "neler var" → query=None (show all listings)
    
-   🔄 SYNONYM MAPPING (use broader/alternative terms):
-   - "araba" / "otomobil" / "araç" → Try category="Araçlar" OR query with brand names
-     STRATEGY: First search with query=None + category="Araçlar"
-     If category not available, try: query="clio focus fiat toyota" (popular brands)
+   🔄 CRITICAL: Generic terms like "araba/otomobil/araç"
+   - DON'T use as query parameter
+   - Use category="Otomotiv" instead
+   - Example: "araba var mı" → query=None, category="Otomotiv"
+   - Example: "BMW var mı" → query="BMW", category="Otomotiv"
    
-   - "laptop" / "dizüstü" → query="laptop" (keep generic term)
-   - "telefon" / "cep telefonu" → query="telefon" OR category="Elektronik"
-   
-   ⚠️ IMPORTANT: 
-   - For "araba/otomobil" queries: Use category filter if possible
-   - If user asks generic term but listings have specific models/brands
-   - Try searching with broader category OR popular brand names
-   
-2. **category** → Infer from context if mentioned
-   - "elektronik" / "telefon" / "bilgisayar" etc.
-   - "araç" / "araba" / "otomobil" → category="Araçlar"
+2. **category** → ALWAYS infer category from context
+   - "araba" / "otomobil" / "araç" → category="Otomotiv"
+   - "telefon" / "laptop" → category="Elektronik"
+   - "bisiklet" → category="Bisiklet" or query="bisiklet"
+   - When in doubt, try category first!
 
 3. **condition** → "new" or "used" if mentioned
 
