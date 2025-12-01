@@ -72,6 +72,20 @@ mcp4 = HostedMCPTool(tool_config={
     "server_url": "https://pazarglobal-production.up.railway.app/sse"
 })
 
+mcp_security = HostedMCPTool(tool_config={
+    "type": "mcp",
+    "server_label": "pazarglobal_security",
+    "allowed_tools": [
+        "verify_pin",
+        "check_session",
+        "get_user_by_phone",
+        "register_user_pin"
+    ],
+    "require_approval": "never",
+    "server_description": "Security tools for PIN authentication and session management",
+    "server_url": "https://pazarglobal-production.up.railway.app/sse"
+})
+
 
 # Shared client for guardrails
 client = AsyncOpenAI()
@@ -165,6 +179,7 @@ You classify user messages into one of the following marketplace intents.
 Respond ONLY with valid JSON following the schema.
 
 ## Valid Intents:
+- **"pin_request"** → user needs PIN authentication (always check session first!)
 - **"create_listing"** → user wants to SELL an item
 - **"update_listing"** → user wants to CHANGE existing listing
 - **"delete_listing"** → user wants to DELETE/REMOVE existing listing
@@ -175,6 +190,7 @@ Respond ONLY with valid JSON following the schema.
 
 ## Keywords:
 
+pin_request: 4-6 digit numbers ONLY ("1234", "123456"), OR session_needed context flag
 create_listing: "satıyorum", "satmak", "satayım", "-um var", "ilan vermek"
 update_listing: "değiştir", "güncelle", "fiyat olsun", "fiyatını yap", "düzenle"
 delete_listing: "sil", "silebilir", "silmek", "silme", "kaldır", "ilanımı iptal", "ilanını sil"
@@ -184,13 +200,14 @@ small_talk: "merhaba", "selam", "teşekkür", "nasılsın", "yardım"
 cancel: "iptal", "vazgeç", "sıfırla", "başa dön" (WITHOUT "ilan" word)
 
 ## Priority:
-1. delete_listing (if "ilan" + "sil")
-2. update_listing (if "ilan" + change words)
-3. publish_listing
-4. create_listing
-5. search_product
-6. cancel (only if "iptal/vazgeç" WITHOUT "ilan")
-7. small_talk
+1. pin_request (if ONLY 4-6 digits OR session_needed flag)
+2. delete_listing (if "ilan" + "sil")
+3. update_listing (if "ilan" + change words)
+4. publish_listing
+5. create_listing
+6. search_product
+7. cancel (only if "iptal/vazgeç" WITHOUT "ilan")
+8. small_talk
 
 Respond with JSON only: {"intent": "create_listing"}
 """,
@@ -436,6 +453,71 @@ Yeni bir işlem için:
 )
 
 
+pinrequestagent = Agent(
+    name="PINRequestAgent",
+    instructions="""You are PINRequestAgent of PazarGlobal - Security & Authentication Manager.
+
+🎯 CRITICAL SECURITY FLOW:
+
+## 1️⃣ FIRST: Check user status
+```python
+result = get_user_by_phone(phone: user_phone_number)
+# Returns: {success, user_id, has_pin, message}
+```
+
+## 2️⃣ IF user.success == False:
+"❌ Kullanıcı bulunamadı. Lütfen önce frontend'den kayıt olun: https://pazarglobal.com/signup"
+→ STOP (no PIN without registration)
+
+## 3️⃣ IF user.has_pin == False:
+"🔐 İlk kez WhatsApp'tan giriş yapıyorsunuz.
+
+Lütfen 4-6 haneli bir PIN belirleyin (örnek: 1234)
+Bu PIN'i güvenli bir yerde saklayın."
+→ Wait for user to send PIN (4-6 digits)
+→ When received: `register_user_pin(user_id, phone, pin)`
+→ "✅ PIN başarıyla kaydedildi! Artık giriş yapabilirsiniz."
+
+## 4️⃣ IF user.has_pin == True:
+"🔐 Lütfen PIN'inizi giriniz:"
+→ Wait for user to send PIN
+→ `verify_pin(phone, pin)`
+
+### verify_pin responses:
+- success=true: "✅ Giriş başarılı! Ne yapmak istersiniz?"
+  → Return session_token to workflow context
+- success=false + "Hatalı PIN. Kalan deneme: X": Show message, ask again
+- success=false + "15 dakika bloklandınız": Show message, explain wait time
+
+## 🔒 TOOLS:
+- get_user_by_phone(phone) → Check if user exists
+- register_user_pin(user_id, phone, pin) → First-time PIN setup
+- verify_pin(phone, pin) → Validate PIN, create session
+
+## ⚠️ SECURITY RULES:
+- NEVER show PIN in responses
+- ALWAYS validate PIN is 4-6 digits before calling tools
+- Store session_token in context after successful verify
+- If blocked, don't allow retry until block expires
+
+## 📱 USER EXPERIENCE:
+Keep messages friendly but secure. Turkish language.
+Examples:
+- "Hoş geldiniz! PIN'inizi giriniz" (welcoming)
+- "Hatalı PIN 😔 2 deneme hakkınız kaldı" (informative)
+- "Güvenlik için 15 dakika bekleyin ⏰" (clear)""",
+    model="gpt-5.1",
+    tools=[mcp_security],
+    model_settings=ModelSettings(
+        store=True,
+        reasoning=Reasoning(
+            effort="low",
+            summary="auto"
+        )
+    )
+)
+
+
 deletelistingagent = Agent(
     name="DeleteListingAgent",
     instructions="""# DeleteListingAgent Instructions
@@ -523,7 +605,16 @@ async def run_workflow(workflow_input: WorkflowInput):
         intent = router_agent_intent_classifier_result["output_parsed"]["intent"]
         
         # Step 2: Route to appropriate agent
-        if intent == "create_listing":
+        if intent == "pin_request":
+            result = await Runner.run(
+                pinrequestagent,
+                input=[*conversation_history],
+                run_config=RunConfig(trace_metadata={
+                    "__trace_source__": "agent-builder",
+                    "workflow_id": "wf_691884cc7e6081908974fe06852942af0249d08cf5054fdb"
+                })
+            )
+        elif intent == "create_listing":
             result = await Runner.run(
                 listingagent,
                 input=[*conversation_history],
