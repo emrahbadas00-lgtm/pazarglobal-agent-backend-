@@ -430,21 +430,27 @@ searchagent = Agent(
 
 🧠 USE YOUR REASONING! Don't rely only on examples, infer from user intent.
 
-1. **query** → Extract SPECIFIC keywords (NOT generic terms!)
+1. **query** → Extract SPECIFIC keywords (NOT generic terms, UNLESS combined with category!)
    
    ✅ GOOD query examples:
-   - "BMW var mı" → query="BMW" (brand name)
+   - "BMW var mı" → query="BMW", category="Otomotiv"
    - "23 Nisan Mahallesi" → query="23 Nisan" (specific location)
-   - "Inventum Sitesi" → query="Inventum" (site name)
-   - "iPhone 14" → query="iPhone 14" (specific model)
+   - "Inventum Sitesi" → query="Inventum", category="Emlak"
+   - "iPhone 14" → query="iPhone 14", category="Elektronik"
+   - "bahçe kat" → query="bahçe kat", category="Emlak" (specific feature)
    
-   ❌ BAD query examples (use category instead!):
-   - "kiralık daire" → DON'T use query! Use category="Emlak"
-   - "araba var mı" → DON'T use query! Use category="Otomotiv"
-   - "satılık ev" → DON'T use query! Use category="Emlak"
+   ⚠️ SPECIAL CASES - Generic + Category (USE BOTH!):
+   - "kiralık daire" → query="kiralık", category="Emlak" (searches "kiralık" in title too!)
+   - "satılık ev" → query="satılık", category="Emlak"
+   - "site içi dubleks" → query="site", property_type="dubleks", category="Emlak"
    
-   🎯 RULE: If term is GENERIC (category-level), use category parameter!
-   🎯 RULE: If term is SPECIFIC (brand, location, model), use query parameter!
+   ❌ ONLY category (NO query) when very generic:
+   - "ev varmı" → query=None, category="Emlak" (show ALL emlak)
+   - "araba var mı" → query=None, category="Otomotiv" (show ALL cars)
+   
+   🎯 RULE: Specific keywords (brand, location, features) → Use query!
+   🎯 RULE: Generic category-only requests → category=X, query=None
+   🎯 RULE: Mixed (generic+specific) → Use BOTH query AND category!
    
    Special cases:
    - "sitedeki ilanları göster" → query=None, category=None (show ALL)
@@ -513,14 +519,20 @@ searchagent = Agent(
 
 ⚠️ CRITICAL: PREFER SIMPLE SEARCHES!
 
-**Strategy 1: Category-first approach (BEST)**
-- User: "kiralık daire varmı" → category="Emlak", query=None (show ALL Emlak listings)
-- User: "araba var mı" → category="Otomotiv", query=None
-- User: "Bursa'da kiralık ev" → category="Emlak", location="Bursa", query=None
-- User: "bursa 23 nisan mahallesi kiralık ev" → category="Emlak", location="23 Nisan", query=None
-- WHY: This returns ALL listings in category, then user can filter!
+**Strategy 1: Category-only (for very generic requests)**
+- User: "ev varmı" → category="Emlak", query=None (show ALL Emlak listings)
+- User: "araba var mı" → category="Otomotiv", query=None (show ALL cars)
+- WHY: Shows everything in category, user browses
 
-**Strategy 2: Specific keyword search**
+**Strategy 2: Query + Category (BEST for specific features)**
+- User: "kiralık daire varmı" → query="kiralık", category="Emlak"
+- User: "satılık ev" → query="satılık", category="Emlak"
+- User: "bahçe kat" → query="bahçe kat", category="Emlak"
+- User: "site içi dubleks" → query="site", property_type="dubleks", category="Emlak"
+- User: "bursa 23 nisan mahallesi kiralık ev" → query="kiralık", category="Emlak", location="23 Nisan"
+- WHY: Finds listings with specific keywords in title/description!
+
+**Strategy 3: Specific keyword search**
 - User: "23 Nisan" → query="23 Nisan", category=None (searches all fields)
 - User: "Inventum Sitesi" → query="Inventum", category="Emlak"
 - User: "BMW" → query="BMW", category="Otomotiv"
@@ -528,9 +540,9 @@ searchagent = Agent(
 
 **Strategy 3: Combined (when multiple criteria)**
 - User: "Bursa'da araba" → category="Otomotiv", location="Bursa", query=None
-- User: "3+1 kiralık daire" → category="Emlak", room_count="3+1", query=None
-- User: "dubleks varmı" → category="Emlak", property_type="dubleks", query=None
-- User: "270 metrekare ev" → category="Emlak", query="270" (searches in description/title)
+- User: "3+1 kiralık daire" → query="kiralık", category="Emlak", room_count="3+1"
+- User: "dubleks varmı" → property_type="dubleks", category="Emlak", query=None
+- User: "270 metrekare ev" → query="270", category="Emlak" (searches in description/title)
 
 🔥 NEW: METADATA FILTERS (Use when specific attributes mentioned!)
 - "3+1 daire" → room_count="3+1" (not query!)
