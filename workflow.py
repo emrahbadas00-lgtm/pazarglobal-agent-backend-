@@ -409,7 +409,7 @@ Lütfen bilgileri kontrol edip tekrar deneyin."
 🚫 DO NOT ask user for fields again - extract from conversation history!
 🚫 DO NOT return user_id as listing ID - extract from tool response!""",
     model="gpt-5.1",
-    tools=[mcp1],
+    tools=[mcp],  # FIXED: Use mcp (has insert_listing_tool), not mcp1
     model_settings=ModelSettings(
         store=True,
         reasoning=Reasoning(
