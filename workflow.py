@@ -427,26 +427,37 @@ searchagent = Agent(
 🎯 Your ONLY task: Search products using search_listings_tool.
 
 📋 Parameter Extraction Rules:
-1. **query** → Extract product keywords from user message with SYNONYM MAPPING
+
+🧠 USE YOUR REASONING! Don't rely only on examples, infer from user intent.
+
+1. **query** → Extract product keywords from user message
    - "bisiklet var mı" → query="bisiklet"
    - "iPhone aramak istiyorum" → query="iPhone"
+   - "23 Nisan Mahallesi" → query="23 Nisan" (search in location too!)
    - "sitedeki ilanları göster" → query=None (show all listings)
    - "neler var" → query=None (show all listings)
    
-   🔄 CRITICAL: Generic terms like "araba/otomobil/araç"
-   - DON'T use as query parameter
-   - Use category="Otomotiv" + metadata_type="vehicle"
-   - Example: "araba var mı" → query=None, category="Otomotiv", metadata_type="vehicle"
-   - Example: "BMW var mı" → query="BMW", category="Otomotiv", metadata_type="vehicle"
-   - Example: "yedek parça" → category="Otomotiv", metadata_type="part"
+   🔄 STRATEGY: Generic terms like "araba"/"ev"
+   - OPTION 1: Use query="araba" (tool will search title + category + description)
+   - OPTION 2: Use category="Otomotiv" + leave query empty
+   - Choose based on context! If user asks "araba var mı" → category works better
+   - If user asks "23 Nisan'da araba" → query="23 Nisan araba" works better
    
-2. **category** → ALWAYS infer category from context
-   - "araba" / "otomobil" / "araç" → category="Otomotiv"
-   - "telefon" / "laptop" → category="Elektronik"
-   - "ev" / "daire" / "emlak" / "kiralık" / "satılık" → category="Emlak"
-   - "bisiklet" → category="Bisiklet" or query="bisiklet"
-   - When in doubt, try category first!
-   - IMPORTANT: Use PARTIAL MATCH for category! Just use main category word (e.g., "Emlak" not "Emlak - Kiralık Daire")
+2. **category** → Infer category from context (SMART INFERENCE)
+   ⚠️ IMPORTANT: Use your reasoning to infer category from user's keywords!
+   
+   Common examples (NOT exhaustive list):
+   - Vehicle-related: "araba", "otomobil", "araç", "BMW", "Mercedes" → "Otomotiv"
+   - Electronics: "telefon", "laptop", "bilgisayar", "iPhone", "Samsung" → "Elektronik"
+   - Real estate: "ev", "daire", "emlak", "kiralık", "satılık", "villa" → "Emlak"
+   - Furniture: "mobilya", "koltuk", "masa", "dolap" → "Mobilya"
+   - Clothing: "giyim", "ayakkabı", "kıyafet", "mont" → "Giyim"
+   
+   🔥 CRITICAL RULES:
+   - If user mentions category explicitly → Use it! (e.g., "Emlak kategorisi" → category="Emlak")
+   - If uncertain → Leave category=None, use query parameter instead
+   - ALWAYS use PARTIAL MATCH: Just main word (e.g., "Emlak" not "Emlak - Kiralık Daire")
+   - Let database handle sub-categories (it uses ilike.%keyword%)
 
 3. **metadata_type** → Filter by listing type (NEW!)
    - "araba" / "araç" / "otomobil" → metadata_type="vehicle"
