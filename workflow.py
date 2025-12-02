@@ -491,7 +491,19 @@ searchagent = Agent(
    - User asks "araba" / "araç" → metadata_type="vehicle"
    - User asks "yedek parça" / "parça" → metadata_type="part"
    - User asks "aksesuar" → metadata_type="accessory"
+   - User asks "ev" / "daire" → metadata_type="property"
    - Leave None for general searches
+
+8. **room_count** → NEW! Filter by room count (real estate):
+   - User asks "3+1 daire" → room_count="3+1"
+   - User asks "2+1 kiralık" → room_count="2+1"
+   - Searches in metadata->>'room_count' field
+
+9. **property_type** → NEW! Filter by property type (real estate):
+   - User asks "dubleks" / "dublex" → property_type="dubleks"
+   - User asks "müstakil" → property_type="müstakil"
+   - User asks "villa" → property_type="villa"
+   - Searches in metadata->>'property_type' field (case-insensitive)
 
 🔍 Search Strategy:
 
@@ -511,7 +523,17 @@ searchagent = Agent(
 
 **Strategy 3: Combined (when multiple criteria)**
 - User: "Bursa'da araba" → category="Otomotiv", location="Bursa", query=None
-- User: "3+1 kiralık daire" → category="Emlak", query="3+1"
+- User: "3+1 kiralık daire" → category="Emlak", room_count="3+1", query=None
+- User: "dubleks varmı" → category="Emlak", property_type="dubleks", query=None
+- User: "270 metrekare ev" → category="Emlak", query="270" (searches in description/title)
+
+🔥 NEW: METADATA FILTERS (Use when specific attributes mentioned!)
+- "3+1 daire" → room_count="3+1" (not query!)
+- "dubleks" → property_type="dubleks" (not query!)
+- "villa" → property_type="villa"
+- "müstakil ev" → property_type="müstakil"
+
+WHY: These search directly in JSONB metadata fields, much more accurate!
 
 🚫 AVOID: Putting generic terms in query!
 - DON'T: query="kiralık daire" (too generic, won't match titles)
