@@ -176,6 +176,12 @@ router_agent_intent_classifier = Agent(
     name="Router Agent (Intent Classifier)",
     instructions="""# Router Agent Instructions
 
+🎯 PLATFORM CONTEXT: PazarGlobal is an online marketplace where users can:
+- List items for SALE (cars, electronics, furniture, etc.)
+- List properties for RENT or SALE (apartments, houses, villas, etc.)  
+- SEARCH for items to buy or rent
+- UPDATE or DELETE their own listings
+
 You classify user messages into one of the following marketplace intents.
 Respond ONLY with valid JSON following the schema.
 
@@ -244,10 +250,11 @@ listingagent = Agent(
 
 ### Initial Listing Creation:
 Extract fields from user message:
-- title → brief product/property title (e.g., "3+1 Dublex Bahçe Katı Daire" for real estate)
+- title → brief product/property title (e.g., "3+1 Dublex Bahçe Katı Kiralık Daire" for real estate)
 - price → numeric price (call clean_price_tool if text like "900 bin" or "65000 tl")
 - condition → "new", "used", "refurbished" (for real estate, default "used")
-- category → infer: "Otomotiv", "Elektronik", "Emlak" (for houses/apartments), "Mobilya", "Genel"
+- category → **ONLY main category**: "Otomotiv", "Elektronik", "Emlak", "Mobilya", "Giyim"
+  ⚠️ CRITICAL: Use ONLY these exact names! No sub-categories like "Emlak – Kiralık Daire"!
 - description → keep user's detailed text, translate to friendly Turkish if needed
 - location → extract city if mentioned (e.g., "Bursa" → location="Bursa"), default "Türkiye"
 - stock → default 1
@@ -278,12 +285,20 @@ If conversation already contains "📝 İlan önizlemesi" (preview):
 ```json
 {
   "type": "property",
-  "property_type": "kiralık" | "satılık",
+  "property_type": "daire" | "dubleks" | "villa" | "müstakil",
+  "ad_type": "rent" | "sale",
   "room_count": "3+1" | "2+1" (if mentioned),
   "square_meters": 270 (if mentioned),
-  "floor": "bahçe katı" | "giriş katı" (if mentioned)
+  "floor": "bahçe katı" | "giriş katı" (if mentioned),
+  "neighborhood": "23 Nisan Mahallesi" (if mentioned),
+  "district": "Nilüfer" (if mentioned),
+  "city": "Bursa" (if mentioned)
 }
 ```
+
+⚠️ CRITICAL for Emlak:
+- property_type = TYPE of building (daire, dubleks, villa)
+- ad_type = rent (kiralık) or sale (satılık)
 
 **For Elektronik:**
 ```json
@@ -472,11 +487,6 @@ searchagent = Agent(
    - ALWAYS use PARTIAL MATCH: Just main word (e.g., "Emlak" not "Emlak - Kiralık Daire")
    - Let database handle sub-categories (it uses ilike.%keyword%)
 
-3. **metadata_type** → Filter by listing type (NEW!)
-   - "araba" / "araç" / "otomobil" → metadata_type="vehicle"
-   - "yedek parça" / "aksesuar" → metadata_type="part"
-   - Leave empty for all types
-
 3. **condition** → "new" or "used" if mentioned
 
 4. **location** → City, district, or neighborhood name
@@ -496,12 +506,10 @@ searchagent = Agent(
 
 6. **limit** → Default 10, increase if user asks for more
 
-7. **metadata_type** → NEW! Filter by type:
-   - User asks "araba" / "araç" → metadata_type="vehicle"
-   - User asks "yedek parça" / "parça" → metadata_type="part"
-   - User asks "aksesuar" → metadata_type="accessory"
-   - User asks "ev" / "daire" → metadata_type="property"
-   - Leave None for general searches
+7. **metadata_type** → Filter by type (rarely needed, category is usually enough):
+   - User asks "yedek parça" specifically → metadata_type="part"
+   - User asks "aksesuar" specifically → metadata_type="accessory"
+   - Usually leave None! Category filter is sufficient.
 
 8. **room_count** → NEW! Filter by room count (real estate):
    - User asks "3+1 daire" → room_count="3+1"
