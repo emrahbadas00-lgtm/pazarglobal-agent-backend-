@@ -244,14 +244,14 @@ listingagent = Agent(
 
 ### Initial Listing Creation:
 Extract fields from user message:
-- title → product title
-- price → numeric price (call clean_price_tool if text like "900 bin")
-- condition → "new", "used", "refurbished"
-- category → infer from product (Otomotiv, Elektronik, Mobilya, etc.)
-- description → friendly Turkish
-- location → default "Türkiye" (update if user mentions city)
+- title → brief product/property title (e.g., "3+1 Dublex Bahçe Katı Daire" for real estate)
+- price → numeric price (call clean_price_tool if text like "900 bin" or "65000 tl")
+- condition → "new", "used", "refurbished" (for real estate, default "used")
+- category → infer: "Otomotiv", "Elektronik", "Emlak" (for houses/apartments), "Mobilya", "Genel"
+- description → keep user's detailed text, translate to friendly Turkish if needed
+- location → extract city if mentioned (e.g., "Bursa" → location="Bursa"), default "Türkiye"
 - stock → default 1
-- **metadata** → CRITICAL! Extract structured data (see below)
+- **metadata** → Extract structured data (see rules below - keep it SIMPLE!)
 
 ### 🔄 Draft Editing (User changes price/title/etc BEFORE publishing):
 If conversation already contains "📝 İlan önizlemesi" (preview):
@@ -263,36 +263,43 @@ If conversation already contains "📝 İlan önizlemesi" (preview):
 
 🔍 METADATA EXTRACTION RULES:
 
-**For Otomotiv category:**
+**For Otomotiv (vehicles):**
 ```json
 {
-  "type": "vehicle" | "part" | "accessory",
-  "brand": "BMW" | "Renault" | "Toyota" (if vehicle),
-  "model": "320i" | "Clio" | "Corolla" (if vehicle),
+  "type": "vehicle",
+  "brand": "BMW" | "Renault" (if mentioned),
   "year": 2018 (if mentioned),
-  "fuel_type": "benzin" | "dizel" | "elektrik" | "hibrit",
-  "transmission": "manuel" | "otomatik",
-  "body_type": "sedan" | "suv" | "hatchback",
-  "mileage": 85000 (if vehicle, km)
+  "fuel_type": "benzin" | "dizel" (if mentioned),
+  "transmission": "manuel" | "otomatik" (if mentioned)
 }
 ```
 
-**For Elektronik category:**
+**For Emlak (real estate):**
 ```json
 {
-  "type": "phone" | "laptop" | "tablet" | "accessory",
-  "brand": "Apple" | "Samsung" | "Xiaomi",
-  "model": "iPhone 14" | "Galaxy S23",
-  "storage": "128GB" | "256GB",
-  "color": "beyaz" | "siyah"
+  "type": "property",
+  "property_type": "kiralık" | "satılık",
+  "room_count": "3+1" | "2+1" (if mentioned),
+  "square_meters": 270 (if mentioned),
+  "floor": "bahçe katı" | "giriş katı" (if mentioned)
 }
 ```
 
-**Generic:**
-If can't extract specific metadata, at minimum set:
+**For Elektronik:**
+```json
+{
+  "type": "electronics",
+  "brand": "Apple" | "Samsung" (if mentioned),
+  "model": "iPhone 14" (if mentioned)
+}
+```
+
+**Default (if unclear):**
 ```json
 {"type": "general"}
 ```
+
+⚠️ IMPORTANT: Keep metadata SIMPLE! Only add fields you can clearly extract. Don't spend too much time analyzing.
 
 💰 Price Flow:
 If user gives "54,999 TL" → call clean_price_tool(price_text: "54,999 TL")
@@ -322,7 +329,7 @@ Store prepared listing (with metadata!) in conversation context for PublishAgent
     model_settings=ModelSettings(
         store=True,
         reasoning=Reasoning(
-            effort="medium",
+            effort="low",
             summary="auto"
         )
     )
