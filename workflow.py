@@ -443,8 +443,10 @@ searchagent = Agent(
 2. **category** → ALWAYS infer category from context
    - "araba" / "otomobil" / "araç" → category="Otomotiv"
    - "telefon" / "laptop" → category="Elektronik"
+   - "ev" / "daire" / "emlak" / "kiralık" / "satılık" → category="Emlak"
    - "bisiklet" → category="Bisiklet" or query="bisiklet"
    - When in doubt, try category first!
+   - IMPORTANT: Use PARTIAL MATCH for category! Just use main category word (e.g., "Emlak" not "Emlak - Kiralık Daire")
 
 3. **metadata_type** → Filter by listing type (NEW!)
    - "araba" / "araç" / "otomobil" → metadata_type="vehicle"
@@ -455,10 +457,15 @@ searchagent = Agent(
 
 4. **location** → City name if mentioned
    - "İstanbul'da" → location="İstanbul"
+   - IMPORTANT: For specific neighborhoods/districts (e.g., "23 Nisan Mahallesi", "Nilüfer"):
+     → Use query parameter instead! (location field contains only city)
+     → Example: "23 Nisan ile ilgili ilan" → query="23 Nisan", category="Emlak"
 
 5. **min_price / max_price** → Extract price range
    - "5000 TL altı" → max_price=5000
    - "10000-20000 TL arası" → min_price=10000, max_price=20000
+   - "65000 TL olan" → min_price=65000, max_price=65000 (exact match)
+   - "tam 50000 TL" → min_price=50000, max_price=50000
 
 6. **limit** → Default 10, increase if user asks for more
 
@@ -485,26 +492,31 @@ searchagent = Agent(
 
 ❌ No Results - SMART RESPONSE STRATEGY:
 
-**STEP 1:** If user asked generic term ("araba", "otomobil", "araç"):
-→ Try searching with category="Otomotiv" (leave query empty)
+**STEP 1:** If user asked generic term or specific category:
+→ Examples: "araba", "kiralık ev", "Emlak - Kiralık Daire"
+→ Try searching with BROAD category only (e.g., "Emlak" not "Emlak - Kiralık Daire")
+→ Fallback: Remove query parameter, use category only
 
 **STEP 2:** If category search returns results:
-→ Extract brand names from titles (e.g., "BMW", "Clio", "Jeep")
-→ RESPONSE: "🚗 Otomotiv kategorisinde [X] ilan bulundu:
-
-Hangi marka ilginizi çekiyor?
-• BMW ([count] ilan)
-• Renault Clio ([count] ilan)
-• Jeep ([count] ilan)
-
-Veya 'otomobil listele' yazarak tümünü görebilirsiniz."
+→ For vehicles: Extract brand names (e.g., "BMW", "Clio")
+→ For real estate: Extract property types from results
+→ RESPONSE: "[X] ilan bulundu. Filtrelemeye yardımcı olabilmem için:
+- Hangi marka/tür ilginizi çekiyor?
+- Bütçeniz nedir?
+- Hangi şehirde arıyorsunuz?"
 
 **STEP 3:** If category search also returns 0:
-→ "Aramanızla eşleşen ilan bulunamadı. Başka bir arama denemek ister misiniz?"
+→ "Aramanızla eşleşen ilan bulunamadı. 
+İsterseniz daha spesifik bir arama deneyebiliriz (şehir, fiyat aralığı, oda sayısı vs.)"
+
+**CRITICAL FIX FOR EXACT CATEGORY SEARCH:**
+- User: "Emlak - Kiralık Daire kategorisindeki ilanları göster"
+- YOU MUST: Use category="Emlak" (not exact string "Emlak - Kiralık Daire")
+- Reason: Database uses ilike.%Emlak%, so partial match works!
 
 **IMPORTANT:** 
-- Always try category fallback for generic terms
-- Extract popular brands from results and suggest them
+- Always try BROAD category fallback (just main word: "Emlak", "Otomotiv", "Elektronik")
+- Extract popular options from results and suggest them
 - Make conversation helpful, not dead-end
 
 🚫 NEVER use insert_listing_tool or clean_price_tool - only search_listings_tool!""",
