@@ -340,17 +340,19 @@ publishagent = Agent(
 
 📋 Flow:
 1. **CRITICAL**: Search conversation history for "📝 İlan önizlemesi" message
-   - Look for fields: title, price, category, location, metadata, description
-   - Extract ALL fields from the preview message
+   - IMPORTANT: Conversation messages are in format: {"role": "assistant", "content": [{"type": "output_text", "text": "..."}]}
+   - You need to search in the "text" field inside output_text content
+   - Look for the MOST RECENT message containing "📝 İlan önizlemesi" emoji
+   - Extract ALL fields from that preview message
    
 2. If preview found → call insert_listing_tool with ALL extracted fields INCLUDING metadata
-   - title: from preview
-   - price: from preview (numeric value)
-   - category: from preview
-   - location: from preview (default "Türkiye")
-   - condition: from preview (default "used")
-   - description: from preview açıklama section
-   - metadata: from preview 🔧 Metadata section (parse JSON)
+   - title: Extract from line after "📝 İlan önizlemesi:" (everything after emoji but before price)
+   - price: Extract numeric value from "💰 [number] TL" line (remove commas, convert to integer)
+   - category: Extract from "🏷️" line (default "Genel" if not found)
+   - location: Extract from "📍" line (default "Türkiye" if not found)
+   - condition: Extract from "🎨 Durum:" line (default "used" if not found)
+   - description: Extract from "📄 Açıklama:" section (everything between that line and next emoji)
+   - metadata: Extract JSON from "🔧 Metadata:" section (parse the JSON carefully)
    - stock: default 1
    
 3. If no preview found → "Yayınlanacak bir ilan yok. Önce ürün bilgilerini verin."
@@ -377,11 +379,19 @@ insert_listing_tool(
 📍 [location]
 🏷️ [category]
 
-İlan ID: [supabase_id]"
+İlan ID: [EXTRACT FROM TOOL RESPONSE result[0]['id']]"
+
+⚠️ CRITICAL: Extract listing ID from tool response:
+- Tool returns: {"success": true, "result": [{"id": "uuid-here", ...}]}
+- YOU MUST extract result[0]["id"] and show it to user
+- DO NOT show user_id, show the ACTUAL listing ID from database
 
 ❌ If tool returns error:
 "❌ İlan kaydedilemedi: [error message]
 Lütfen bilgileri kontrol edip tekrar deneyin."
+
+❌ If tool returns success=false or empty result:
+"❌ İlan veritabanına kaydedilemedi. Lütfen daha sonra tekrar deneyin."
 
 ❌ No Preview Found:
 "Yayınlanacak bir ilan yok. Önce ürün bilgilerini verin.
@@ -389,7 +399,8 @@ Lütfen bilgileri kontrol edip tekrar deneyin."
 Örnek: '2020 Renault Clio satıyorum, 900 bin TL'"
 
 🚫 DO NOT use clean_price_tool or search_listings_tool
-🚫 DO NOT ask user for fields again - extract from conversation history!""",
+🚫 DO NOT ask user for fields again - extract from conversation history!
+🚫 DO NOT return user_id as listing ID - extract from tool response!""",
     model="gpt-5.1",
     tools=[mcp1],
     model_settings=ModelSettings(
