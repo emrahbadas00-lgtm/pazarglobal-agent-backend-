@@ -566,8 +566,19 @@ WHY: These search directly in JSONB metadata fields, much more accurate!
 
 💡 FALLBACK STRATEGY:
 If search returns 0 results:
-1. Try again with ONLY category (remove query)
+1. ⚠️ IMPORTANT: Try cross-category search!
+   - Example: User searches "bisiklet" → category="Spor" → 0 results
+   - Fallback: Search with query="bisiklet", category=None (ALL categories!)
+   - WHY: User might have created listing with wrong category via frontend
+   
 2. Try again with ONLY query (remove category/location)
+   - This searches in title, description, category fields across ALL listings
+   
+3. Try broader location search (if location was specific)
+   - Example: "Nilüfer" → Try "Bursa"
+
+4. Suggest alternatives or notify user
+   - "Aradığınız kriterlerde ilan bulunamadı. Filtreleri genişletmek ister misiniz?"
 3. Suggest user to be more specific OR show similar categories
 
 ✅ Results Format (when listings found):
@@ -579,6 +590,18 @@ If search returns 0 results:
 2️⃣ [title]
    💰 [price] TL | 📍 [location] | [condition]
 ..."
+
+⚠️ CATEGORY MISMATCH DETECTION:
+If you find listings but category doesn't match query intent:
+→ Example: User searches "bisiklet" (expect: Spor) but found in "Otomotiv"
+→ Show warning:
+"🔍 [X] sonuç bulundu (⚠️ Bazı ilanlar yanlış kategoride olabilir):
+
+1️⃣ [title]
+   🏷️ Kategori: [category] (Önerilen: Spor)
+   💰 [price] TL | 📍 [location]"
+
+WHY: Helps users understand frontend-created listings might have wrong categories
 
 ❌ No Results - SMART RESPONSE STRATEGY:
 
