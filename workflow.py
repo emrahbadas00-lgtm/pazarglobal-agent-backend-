@@ -21,7 +21,7 @@ mcp = HostedMCPTool(tool_config={
     ],
     "require_approval": "never",
     "server_description": "pazarglobal",
-    "server_url": "https://pazarglobal-production.up.railway.app/sse"
+    "server_url": "https://pazarglobalmcptools-production.up.railway.app/sse"
 })
 
 mcp1 = HostedMCPTool(tool_config={
@@ -33,7 +33,7 @@ mcp1 = HostedMCPTool(tool_config={
     ],
     "require_approval": "never",
     "server_description": "pazarglobal",
-    "server_url": "https://pazarglobal-production.up.railway.app/sse"
+    "server_url": "https://pazarglobalmcptools-production.up.railway.app/sse"
 })
 
 mcp2 = HostedMCPTool(tool_config={
@@ -44,7 +44,7 @@ mcp2 = HostedMCPTool(tool_config={
     ],
     "require_approval": "never",
     "server_description": "pazarglobal",
-    "server_url": "https://pazarglobal-production.up.railway.app/sse"
+    "server_url": "https://pazarglobalmcptools-production.up.railway.app/sse"
 })
 
 mcp3 = HostedMCPTool(tool_config={
@@ -57,7 +57,7 @@ mcp3 = HostedMCPTool(tool_config={
     ],
     "require_approval": "never",
     "server_description": "pzarglobal",
-    "server_url": "https://pazarglobal-production.up.railway.app/sse"
+    "server_url": "https://pazarglobalmcptools-production.up.railway.app/sse"
 })
 
 mcp4 = HostedMCPTool(tool_config={
@@ -69,7 +69,7 @@ mcp4 = HostedMCPTool(tool_config={
     ],
     "require_approval": "always",
     "server_description": "pazarglobal",
-    "server_url": "https://pazarglobal-production.up.railway.app/sse"
+    "server_url": "https://pazarglobalmcptools-production.up.railway.app/sse"
 })
 
 # TEMPORARILY DISABLED - causing 500 errors
