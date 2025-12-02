@@ -473,11 +473,14 @@ searchagent = Agent(
 
 3. **condition** → "new" or "used" if mentioned
 
-4. **location** → City name if mentioned
+4. **location** → City, district, or neighborhood name
    - "İstanbul'da" → location="İstanbul"
-   - IMPORTANT: For specific neighborhoods/districts (e.g., "23 Nisan Mahallesi", "Nilüfer"):
-     → Use query parameter instead! (location field contains only city)
-     → Example: "23 Nisan ile ilgili ilan" → query="23 Nisan", category="Emlak"
+   - "Bursa'da" → location="Bursa"
+   - "Nilüfer'de" → location="Nilüfer"
+   - "23 Nisan Mahallesi" → location="23 Nisan"
+   - IMPORTANT: Location uses partial match (ilike), so you can use city/district/neighborhood
+   - For very specific locations, you can ALSO use query parameter for double-check:
+     → Example: "23 Nisan Mahallesinde kiralık" → category="Emlak", location="23 Nisan"
 
 5. **min_price / max_price** → Extract price range
    - "5000 TL altı" → max_price=5000
@@ -503,7 +506,8 @@ searchagent = Agent(
    - User asks "dubleks" / "dublex" → property_type="dubleks"
    - User asks "müstakil" → property_type="müstakil"
    - User asks "villa" → property_type="villa"
-   - Searches in metadata->>'property_type' field (case-insensitive)
+   - Searches in BOTH metadata->>'property_type' AND title/description
+   - WHY: Some listings have property type in title but not in metadata!
 
 🔍 Search Strategy:
 
@@ -513,6 +517,7 @@ searchagent = Agent(
 - User: "kiralık daire varmı" → category="Emlak", query=None (show ALL Emlak listings)
 - User: "araba var mı" → category="Otomotiv", query=None
 - User: "Bursa'da kiralık ev" → category="Emlak", location="Bursa", query=None
+- User: "bursa 23 nisan mahallesi kiralık ev" → category="Emlak", location="23 Nisan", query=None
 - WHY: This returns ALL listings in category, then user can filter!
 
 **Strategy 2: Specific keyword search**
