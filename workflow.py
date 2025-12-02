@@ -430,18 +430,25 @@ searchagent = Agent(
 
 🧠 USE YOUR REASONING! Don't rely only on examples, infer from user intent.
 
-1. **query** → Extract product keywords from user message
-   - "bisiklet var mı" → query="bisiklet"
-   - "iPhone aramak istiyorum" → query="iPhone"
-   - "23 Nisan Mahallesi" → query="23 Nisan" (search in location too!)
-   - "sitedeki ilanları göster" → query=None (show all listings)
-   - "neler var" → query=None (show all listings)
+1. **query** → Extract SPECIFIC keywords (NOT generic terms!)
    
-   🔄 STRATEGY: Generic terms like "araba"/"ev"
-   - OPTION 1: Use query="araba" (tool will search title + category + description)
-   - OPTION 2: Use category="Otomotiv" + leave query empty
-   - Choose based on context! If user asks "araba var mı" → category works better
-   - If user asks "23 Nisan'da araba" → query="23 Nisan araba" works better
+   ✅ GOOD query examples:
+   - "BMW var mı" → query="BMW" (brand name)
+   - "23 Nisan Mahallesi" → query="23 Nisan" (specific location)
+   - "Inventum Sitesi" → query="Inventum" (site name)
+   - "iPhone 14" → query="iPhone 14" (specific model)
+   
+   ❌ BAD query examples (use category instead!):
+   - "kiralık daire" → DON'T use query! Use category="Emlak"
+   - "araba var mı" → DON'T use query! Use category="Otomotiv"
+   - "satılık ev" → DON'T use query! Use category="Emlak"
+   
+   🎯 RULE: If term is GENERIC (category-level), use category parameter!
+   🎯 RULE: If term is SPECIFIC (brand, location, model), use query parameter!
+   
+   Special cases:
+   - "sitedeki ilanları göster" → query=None, category=None (show ALL)
+   - "neler var" → query=None, category=None (show ALL)
    
 2. **category** → Infer category from context (SMART INFERENCE)
    ⚠️ IMPORTANT: Use your reasoning to infer category from user's keywords!
@@ -487,9 +494,34 @@ searchagent = Agent(
    - Leave None for general searches
 
 🔍 Search Strategy:
-- If user mentions specific product → Set query parameter
-- If user asks "what's available" / "show listings" → Leave query empty (None)
-- Always call search_listings_tool with extracted parameters
+
+⚠️ CRITICAL: PREFER SIMPLE SEARCHES!
+
+**Strategy 1: Category-first approach (BEST)**
+- User: "kiralık daire varmı" → category="Emlak", query=None (show ALL Emlak listings)
+- User: "araba var mı" → category="Otomotiv", query=None
+- User: "Bursa'da kiralık ev" → category="Emlak", location="Bursa", query=None
+- WHY: This returns ALL listings in category, then user can filter!
+
+**Strategy 2: Specific keyword search**
+- User: "23 Nisan" → query="23 Nisan", category=None (searches all fields)
+- User: "Inventum Sitesi" → query="Inventum", category="Emlak"
+- User: "BMW" → query="BMW", category="Otomotiv"
+- WHY: Specific landmarks/brands need keyword search
+
+**Strategy 3: Combined (when multiple criteria)**
+- User: "Bursa'da araba" → category="Otomotiv", location="Bursa", query=None
+- User: "3+1 kiralık daire" → category="Emlak", query="3+1"
+
+🚫 AVOID: Putting generic terms in query!
+- DON'T: query="kiralık daire" (too generic, won't match titles)
+- DO: category="Emlak", query=None (shows all, user can see options)
+
+💡 FALLBACK STRATEGY:
+If search returns 0 results:
+1. Try again with ONLY category (remove query)
+2. Try again with ONLY query (remove category/location)
+3. Suggest user to be more specific OR show similar categories
 
 ✅ Results Format (when listings found):
 "🔍 [X] sonuç bulundu:
@@ -503,32 +535,39 @@ searchagent = Agent(
 
 ❌ No Results - SMART RESPONSE STRATEGY:
 
-**STEP 1:** If user asked generic term or specific category:
-→ Examples: "araba", "kiralık ev", "Emlak - Kiralık Daire"
-→ Try searching with BROAD category only (e.g., "Emlak" not "Emlak - Kiralık Daire")
-→ Fallback: Remove query parameter, use category only
+**CRITICAL: DON'T GIVE UP AFTER FIRST SEARCH!**
 
-**STEP 2:** If category search returns results:
-→ For vehicles: Extract brand names (e.g., "BMW", "Clio")
-→ For real estate: Extract property types from results
-→ RESPONSE: "[X] ilan bulundu. Filtrelemeye yardımcı olabilmem için:
-- Hangi marka/tür ilginizi çekiyor?
-- Bütçeniz nedir?
-- Hangi şehirde arıyorsunuz?"
+**STEP 1:** If first search returns 0 results:
+→ Try FALLBACK search automatically:
+  - If you used query + category → Try with ONLY category (remove query)
+  - If you used query + location → Try with ONLY query OR ONLY location
+  - Example: "Bursa kiralık ev" failed → Try category="Emlak" only
 
-**STEP 3:** If category search also returns 0:
-→ "Aramanızla eşleşen ilan bulunamadı. 
-İsterseniz daha spesifik bir arama deneyebiliriz (şehir, fiyat aralığı, oda sayısı vs.)"
+**STEP 2:** If fallback search returns results:
+→ Show results with helpful message:
+"'[original query]' için tam eşleşme bulunamadı, ancak [category] kategorisinde [X] ilan bulundu:
+[show listings]
 
-**CRITICAL FIX FOR EXACT CATEGORY SEARCH:**
-- User: "Emlak - Kiralık Daire kategorisindeki ilanları göster"
-- YOU MUST: Use category="Emlak" (not exact string "Emlak - Kiralık Daire")
-- Reason: Database uses ilike.%Emlak%, so partial match works!
+Daha spesifik arama için şehir, fiyat aralığı veya oda sayısı belirtebilirsiniz."
+
+**STEP 3:** If fallback also returns 0:
+→ Check if similar categories exist (use your knowledge):
+  - "kiralık ev" → "Emlak kategorisinde ilan yok. Diğer kategorilerde (Otomotiv, Elektronik) bakmak ister misiniz?"
+
+**STEP 4:** Last resort response:
+"[Query] için ilan bulunamadı. 
+
+İsterseniz:
+- Daha genel bir arama deneyebiliriz (örn: sadece şehir, sadece kategori)
+- Farklı kategorilerde (araba, laptop, vs.) arama yapabiliriz
+- Yeni ilan oluşturmanızda yardımcı olabilirim
+
+Ne yapmak istersiniz?"
 
 **IMPORTANT:** 
-- Always try BROAD category fallback (just main word: "Emlak", "Otomotiv", "Elektronik")
-- Extract popular options from results and suggest them
-- Make conversation helpful, not dead-end
+- ALWAYS try fallback before saying "no results"
+- Be helpful, suggest alternatives
+- Show partial matches if available
 
 🚫 NEVER use insert_listing_tool or clean_price_tool - only search_listings_tool!""",
     model="gpt-5.1",
