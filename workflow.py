@@ -3,6 +3,7 @@ Pazarglobal Agent Workflow
 Refactored to use native function tools instead of MCP
 """
 from agents import Agent, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
+from agents.tool import function_tool
 from openai import AsyncOpenAI
 from types import SimpleNamespace
 from guardrails.runtime import load_config_bundle, instantiate_guardrails, run_guardrails
@@ -20,6 +21,7 @@ from tools.list_user_listings import list_user_listings
 
 
 # Native function tool definitions (plain Python async functions)
+@function_tool
 async def clean_price_tool(price_text: Optional[str] = None) -> Dict[str, Optional[int]]:
     """
     Fiyat metnini temizler ve sayısal değeri döndürür.
@@ -32,11 +34,9 @@ async def clean_price_tool(price_text: Optional[str] = None) -> Dict[str, Option
     """
     return clean_price(price_text)
 
-# Add name attribute for Agents SDK
-clean_price_tool.name = "clean_price_tool"
 
 
-
+@function_tool
 async def insert_listing_tool(
     title: str,
     user_id: str = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
@@ -74,10 +74,8 @@ async def insert_listing_tool(
         metadata=metadata
     )
 
-# Add name attribute for Agents SDK
-insert_listing_tool.name = "insert_listing_tool"
 
-
+@function_tool
 async def search_listings_tool(
     query: Optional[str] = None,
     category: Optional[str] = None,
@@ -112,10 +110,8 @@ async def search_listings_tool(
         metadata_type=metadata_type
     )
 
-# Add name attribute for Agents SDK
-search_listings_tool.name = "search_listings_tool"
 
-
+@function_tool
 async def update_listing_tool(
     listing_id: str,
     title: Optional[str] = None,
@@ -146,10 +142,8 @@ async def update_listing_tool(
         metadata=metadata
     )
 
-# Add name attribute for Agents SDK
-update_listing_tool.name = "update_listing_tool"
 
-
+@function_tool
 async def delete_listing_tool(listing_id: str) -> Dict[str, Any]:
     """
     İlanı siler (Supabase'den).
@@ -159,10 +153,8 @@ async def delete_listing_tool(listing_id: str) -> Dict[str, Any]:
     """
     return await delete_listing(listing_id=listing_id)
 
-# Add name attribute for Agents SDK
-delete_listing_tool.name = "delete_listing_tool"
 
-
+@function_tool
 async def list_user_listings_tool(
     user_id: str,
     limit: int = 20
@@ -175,9 +167,6 @@ async def list_user_listings_tool(
         limit: Sonuç sayısı limiti
     """
     return await list_user_listings(user_id=user_id, limit=limit)
-
-# Add name attribute for Agents SDK
-list_user_listings_tool.name = "list_user_listings_tool"
 
 
 # Shared client for guardrails
