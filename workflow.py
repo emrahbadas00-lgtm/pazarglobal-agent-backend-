@@ -1,91 +1,178 @@
 """
 Pazarglobal Agent Workflow
-Direct port of Agent Builder SDK Python export
-Uses OpenAI Agents SDK with HostedMCP tools
+Refactored to use native function tools instead of MCP
 """
-from agents import HostedMCPTool, Agent, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
+from agents import function, Agent, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
 from openai import AsyncOpenAI
 from types import SimpleNamespace
 from guardrails.runtime import load_config_bundle, instantiate_guardrails, run_guardrails
 from pydantic import BaseModel
 from openai.types.shared.reasoning import Reasoning
+from typing import Optional, Dict, Any
+
+# Import tool implementations
+from tools.clean_price import clean_price
+from tools.insert_listing import insert_listing
+from tools.search_listings import search_listings
+from tools.update_listing import update_listing
+from tools.delete_listing import delete_listing
+from tools.list_user_listings import list_user_listings
 
 
-# MCP Tool definitions - connects to Railway MCP server
-mcp = HostedMCPTool(tool_config={
-    "type": "mcp",
-    "server_label": "pazarglobal",
-    "allowed_tools": [
-        "clean_price_tool",
-        "insert_listing_tool"
-    ],
-    "require_approval": "never",
-    "server_description": "pazarglobal",
-    "server_url": "https://pazarglobal-production.up.railway.app/sse"
-})
+from tools.clean_price import clean_price
+from tools.insert_listing import insert_listing
+from tools.search_listings import search_listings
+from tools.update_listing import update_listing
+from tools.delete_listing import delete_listing
+from tools.list_user_listings import list_user_listings
 
-mcp1 = HostedMCPTool(tool_config={
-    "type": "mcp",
-    "server_label": "pazarglobal",
-    "allowed_tools": [
-        "update_listing_tool",
-        "list_user_listings_tool"
-    ],
-    "require_approval": "never",
-    "server_description": "pazarglobal",
-    "server_url": "https://pazarglobal-production.up.railway.app/sse"
-})
 
-mcp2 = HostedMCPTool(tool_config={
-    "type": "mcp",
-    "server_label": "pazarglobal",
-    "allowed_tools": [
-        "search_listings_tool"
-    ],
-    "require_approval": "never",
-    "server_description": "pazarglobal",
-    "server_url": "https://pazarglobal-production.up.railway.app/sse"
-})
+# Native function tool wrappers
+@function
+async def clean_price_tool(price_text: Optional[str] = None) -> Dict[str, Optional[int]]:
+    """
+    Fiyat metnini temizler ve sayısal değeri döndürür.
+    
+    Args:
+        price_text: Temizlenecek fiyat metni
+        
+    Returns:
+        Temizlenmiş fiyat değeri (int veya None)
+    """
+    return clean_price(price_text)
 
-mcp3 = HostedMCPTool(tool_config={
-    "type": "mcp",
-    "server_label": "pazarglobal",
-    "allowed_tools": [
-        "clean_price_tool",
-        "update_listing_tool",
-        "list_user_listings_tool"
-    ],
-    "require_approval": "never",
-    "server_description": "pzarglobal",
-    "server_url": "https://pazarglobal-production.up.railway.app/sse"
-})
 
-mcp4 = HostedMCPTool(tool_config={
-    "type": "mcp",
-    "server_label": "pazarglobal",
-    "allowed_tools": [
-        "delete_listing_tool",
-        "list_user_listings_tool"
-    ],
-    "require_approval": "always",
-    "server_description": "pazarglobal",
-    "server_url": "https://pazarglobal-production.up.railway.app/sse"
-})
+@function
+async def insert_listing_tool(
+    title: str,
+    user_id: str = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+    price: Optional[int] = None,
+    condition: Optional[str] = None,
+    category: Optional[str] = None,
+    description: Optional[str] = None,
+    location: Optional[str] = None,
+    stock: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Yeni ilan ekler (Supabase 'listings' tablosuna).
+    
+    Args:
+        title: Ürün başlığı (zorunlu)
+        user_id: Kullanıcı UUID
+        price: Fiyat (opsiyonel)
+        condition: Durum (opsiyonel, örn: "new", "used")
+        category: Kategori (opsiyonel)
+        description: Ürün açıklaması (opsiyonel)
+        location: Lokasyon (opsiyonel)
+        stock: Stok adedi (opsiyonel)
+        metadata: JSONB metadata
+    """
+    return await insert_listing(
+        title=title,
+        user_id=user_id,
+        price=price,
+        condition=condition,
+        category=category,
+        description=description,
+        location=location,
+        stock=stock,
+        metadata=metadata
+    )
 
-# TEMPORARILY DISABLED - causing 500 errors
-# mcp_security = HostedMCPTool(tool_config={
-#     "type": "mcp",
-#     "server_label": "pazarglobal_security",
-#     "allowed_tools": [
-#         "verify_pin",
-#         "check_session",
-#         "get_user_by_phone",
-#         "register_user_pin"
-#     ],
-#     "require_approval": "never",
-#     "server_description": "Security tools for PIN authentication and session management",
-#     "server_url": "https://pazarglobal-production.up.railway.app/sse"
-# })
+
+@function
+async def search_listings_tool(
+    query: Optional[str] = None,
+    category: Optional[str] = None,
+    condition: Optional[str] = None,
+    location: Optional[str] = None,
+    min_price: Optional[int] = None,
+    max_price: Optional[int] = None,
+    limit: int = 10,
+    metadata_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Supabase'den ilan arar.
+    
+    Args:
+        query: Arama metni
+        category: Kategori filtresi
+        condition: Durum filtresi
+        location: Lokasyon filtresi
+        min_price: Minimum fiyat
+        max_price: Maximum fiyat
+        limit: Sonuç sayısı limiti
+        metadata_type: Metadata type filter
+    """
+    return await search_listings(
+        query=query,
+        category=category,
+        condition=condition,
+        location=location,
+        min_price=min_price,
+        max_price=max_price,
+        limit=limit,
+        metadata_type=metadata_type
+    )
+
+
+@function
+async def update_listing_tool(
+    listing_id: str,
+    title: Optional[str] = None,
+    price: Optional[int] = None,
+    condition: Optional[str] = None,
+    category: Optional[str] = None,
+    description: Optional[str] = None,
+    location: Optional[str] = None,
+    stock: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Mevcut ilanı günceller.
+    
+    Args:
+        listing_id: Güncellenecek ilan ID (zorunlu)
+        title, price, condition, category, description, location, stock, metadata: Güncellenecek alanlar
+    """
+    return await update_listing(
+        listing_id=listing_id,
+        title=title,
+        price=price,
+        condition=condition,
+        category=category,
+        description=description,
+        location=location,
+        stock=stock,
+        metadata=metadata
+    )
+
+
+@function
+async def delete_listing_tool(listing_id: str) -> Dict[str, Any]:
+    """
+    İlanı siler (Supabase'den).
+    
+    Args:
+        listing_id: Silinecek ilan ID (zorunlu)
+    """
+    return await delete_listing(listing_id=listing_id)
+
+
+@function
+async def list_user_listings_tool(
+    user_id: str,
+    limit: int = 20
+) -> Dict[str, Any]:
+    """
+    Kullanıcının tüm ilanlarını listeler.
+    
+    Args:
+        user_id: Kullanıcı UUID (zorunlu)
+        limit: Sonuç sayısı limiti
+    """
+    return await list_user_listings(user_id=user_id, limit=limit)
 
 
 # Shared client for guardrails
@@ -340,7 +427,7 @@ Show PREVIEW:
 
 Store prepared listing (with metadata!) in conversation context for PublishAgent.""",
     model="gpt-5.1",
-    tools=[mcp],
+    tools=[clean_price_tool],
     model_settings=ModelSettings(
         store=True,
         reasoning=Reasoning(
@@ -424,7 +511,7 @@ Lütfen bilgileri kontrol edip tekrar deneyin."
 🚫 DO NOT ask user for fields again - extract from conversation history!
 🚫 DO NOT return user_id as listing ID - extract from tool response!""",
     model="gpt-5.1",
-    tools=[mcp],  # FIXED: Use mcp (has insert_listing_tool), not mcp1
+    tools=[insert_listing_tool],
     model_settings=ModelSettings(
         store=True,
         reasoning=Reasoning(
@@ -641,7 +728,7 @@ Ne yapmak istersiniz?"
 
 🚫 NEVER use insert_listing_tool or clean_price_tool - only search_listings_tool!""",
     model="gpt-5.1",
-    tools=[mcp2],
+    tools=[search_listings_tool],
     model_settings=ModelSettings(
         store=True,
         reasoning=Reasoning(
@@ -709,7 +796,7 @@ Tools available:
 
 NEVER use insert_listing_tool!""",
     model="gpt-5.1",
-    tools=[mcp3],
+    tools=[update_listing_tool, list_user_listings_tool, clean_price_tool],
     model_settings=ModelSettings(
         store=True,
         reasoning=Reasoning(
@@ -856,7 +943,7 @@ Tools:
 - list_user_listings_tool
 - delete_listing_tool""",
     model="gpt-5.1",
-    tools=[mcp4],
+    tools=[delete_listing_tool, list_user_listings_tool],
     model_settings=ModelSettings(
         store=True,
         reasoning=Reasoning(

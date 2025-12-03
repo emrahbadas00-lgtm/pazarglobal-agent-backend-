@@ -10,3 +10,7 @@ openai>=1.54.0
 
 # Guardrails
 openai-guardrails>=0.1.0
+
+# Supabase client for database operations
+supabase>=2.0.0
+python-dotenv>=1.0.0
