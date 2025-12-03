@@ -36,7 +36,7 @@ async def clean_price_tool(price_text: Optional[str] = None) -> Dict[str, Option
 
 
 
-@function_tool
+@function_tool(strict_mode=False)
 async def insert_listing_tool(
     title: str,
     user_id: str = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
@@ -111,7 +111,7 @@ async def search_listings_tool(
     )
 
 
-@function_tool
+@function_tool(strict_mode=False)
 async def update_listing_tool(
     listing_id: str,
     title: Optional[str] = None,
