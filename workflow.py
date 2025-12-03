@@ -2,7 +2,7 @@
 Pazarglobal Agent Workflow
 Refactored to use native function tools instead of MCP
 """
-from agents import function, Agent, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
+from agents import Agent, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
 from openai import AsyncOpenAI
 from types import SimpleNamespace
 from guardrails.runtime import load_config_bundle, instantiate_guardrails, run_guardrails
@@ -19,16 +19,7 @@ from tools.delete_listing import delete_listing
 from tools.list_user_listings import list_user_listings
 
 
-from tools.clean_price import clean_price
-from tools.insert_listing import insert_listing
-from tools.search_listings import search_listings
-from tools.update_listing import update_listing
-from tools.delete_listing import delete_listing
-from tools.list_user_listings import list_user_listings
-
-
-# Native function tool wrappers
-@function
+# Native function tool definitions (plain Python async functions)
 async def clean_price_tool(price_text: Optional[str] = None) -> Dict[str, Optional[int]]:
     """
     Fiyat metnini temizler ve sayısal değeri döndürür.
@@ -42,7 +33,7 @@ async def clean_price_tool(price_text: Optional[str] = None) -> Dict[str, Option
     return clean_price(price_text)
 
 
-@function
+
 async def insert_listing_tool(
     title: str,
     user_id: str = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
@@ -81,7 +72,7 @@ async def insert_listing_tool(
     )
 
 
-@function
+
 async def search_listings_tool(
     query: Optional[str] = None,
     category: Optional[str] = None,
@@ -117,7 +108,7 @@ async def search_listings_tool(
     )
 
 
-@function
+
 async def update_listing_tool(
     listing_id: str,
     title: Optional[str] = None,
@@ -149,7 +140,7 @@ async def update_listing_tool(
     )
 
 
-@function
+
 async def delete_listing_tool(listing_id: str) -> Dict[str, Any]:
     """
     İlanı siler (Supabase'den).
@@ -160,7 +151,7 @@ async def delete_listing_tool(listing_id: str) -> Dict[str, Any]:
     return await delete_listing(listing_id=listing_id)
 
 
-@function
+
 async def list_user_listings_tool(
     user_id: str,
     limit: int = 20
