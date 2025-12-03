@@ -32,6 +32,9 @@ async def clean_price_tool(price_text: Optional[str] = None) -> Dict[str, Option
     """
     return clean_price(price_text)
 
+# Add name attribute for Agents SDK
+clean_price_tool.name = "clean_price_tool"
+
 
 
 async def insert_listing_tool(
@@ -71,6 +74,8 @@ async def insert_listing_tool(
         metadata=metadata
     )
 
+# Add name attribute for Agents SDK
+insert_listing_tool.name = "insert_listing_tool"
 
 
 async def search_listings_tool(
@@ -107,6 +112,8 @@ async def search_listings_tool(
         metadata_type=metadata_type
     )
 
+# Add name attribute for Agents SDK
+search_listings_tool.name = "search_listings_tool"
 
 
 async def update_listing_tool(
@@ -139,6 +146,8 @@ async def update_listing_tool(
         metadata=metadata
     )
 
+# Add name attribute for Agents SDK
+update_listing_tool.name = "update_listing_tool"
 
 
 async def delete_listing_tool(listing_id: str) -> Dict[str, Any]:
@@ -150,6 +159,8 @@ async def delete_listing_tool(listing_id: str) -> Dict[str, Any]:
     """
     return await delete_listing(listing_id=listing_id)
 
+# Add name attribute for Agents SDK
+delete_listing_tool.name = "delete_listing_tool"
 
 
 async def list_user_listings_tool(
@@ -164,6 +175,9 @@ async def list_user_listings_tool(
         limit: Sonuç sayısı limiti
     """
     return await list_user_listings(user_id=user_id, limit=limit)
+
+# Add name attribute for Agents SDK
+list_user_listings_tool.name = "list_user_listings_tool"
 
 
 # Shared client for guardrails
