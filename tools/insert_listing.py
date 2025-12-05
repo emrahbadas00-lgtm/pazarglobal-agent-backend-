@@ -11,6 +11,16 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
 
+def normalize_category_with_metadata(category: Optional[str], metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Force category to align with detected metadata type for consistency."""
+    meta_type = (metadata or {}).get("type") if isinstance(metadata, dict) else None
+    if meta_type == "vehicle":
+        return "Otomotiv"
+    if meta_type == "property":
+        return "Emlak"
+    return category
+
+
 async def insert_listing(
     title: str,
     user_id: str = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",  # Default test user for development
@@ -88,6 +98,9 @@ async def insert_listing(
             metadata["original_category"] = original_category
             metadata["category_corrected"] = True
 
+    # Align category with metadata (e.g., vehicle => Otomotiv)
+    category = normalize_category_with_metadata(category, metadata)
+
     url = f"{SUPABASE_URL}/rest/v1/listings"
 
     payload: Dict[str, Any] = {
@@ -109,6 +122,9 @@ async def insert_listing(
     if images is not None:
         # Persist provided storage paths; DB default handles empty list otherwise
         payload["images"] = images
+        # Legacy single image column support
+        if images:
+            payload["image_url"] = images[0]
 
     headers = {
         "Content-Type": "application/json",

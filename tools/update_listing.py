@@ -6,6 +6,16 @@ import httpx
 from typing import Optional, List
 from .suggest_category import suggest_category
 
+
+def normalize_category_with_metadata(category: Optional[str], metadata: Optional[dict]) -> Optional[str]:
+    """Ensure category matches metadata type (e.g., vehicle => Otomotiv)."""
+    meta_type = (metadata or {}).get("type") if isinstance(metadata, dict) else None
+    if meta_type == "vehicle":
+        return "Otomotiv"
+    if meta_type == "property":
+        return "Emlak"
+    return category
+
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
@@ -77,6 +87,8 @@ async def update_listing(
         payload["metadata"] = metadata
     if images is not None:
         payload["images"] = images
+        if images:
+            payload["image_url"] = images[0]
     
     if not payload:
         return {
@@ -130,6 +142,9 @@ async def update_listing(
                     metadata["original_category"] = original_category
                     metadata["category_corrected"] = True
                     payload["metadata"] = metadata
+
+                # Align category with metadata type to avoid cross-category saves
+                payload["category"] = normalize_category_with_metadata(payload.get("category"), metadata or payload.get("metadata"))
     
     headers = {
         "apikey": SUPABASE_KEY,
