@@ -40,7 +40,17 @@ async def generate_signed_urls(paths: List[str], expires_in: int = 3600) -> Dict
             return {}
         data = resp.json() or []
         # Supabase returns list of objects with {signedURL, path}
-        return {item.get("path"): f"{SUPABASE_URL}{item.get('signedURL')}" for item in data if item.get("signedURL")}
+        signed_map: Dict[str, str] = {}
+        for item in data:
+            signed_url = item.get("signedURL")
+            path = item.get("path")
+            if not signed_url or not path:
+                continue
+            # Some paths contain spaces; Twilio/clients need URL-encoded links
+            full_url = f"{SUPABASE_URL}{signed_url}"
+            full_url = full_url.replace(" ", "%20")
+            signed_map[path] = full_url
+        return signed_map
     except Exception:
         return {}
 
