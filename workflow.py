@@ -418,11 +418,13 @@ Show PREVIEW:
 📱 [title]
 💰 [price] TL
 📦 Durum: [condition]
+    👤 İlan sahibi: [user_name if available]
 🏷️ Kategori: [category]
 📍 [location]
 📸 Fotoğraflar: [N adet] (yollar sistemde saklanıyor, yayında görünecek; eğer media_paths yoksa 0 yaz)
 🔧 Metadata: [type, brand if vehicle]
 🆔 Draft ID: [draft_listing_id if extracted]
+    👤 İlan sahibi: [user_name if available]
 
 ✅ Onaylamak için 'onayla' yazın
 ✏️ Değiştirmek için 'fiyat X olsun' gibi komutlar verin"

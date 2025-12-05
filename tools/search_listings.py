@@ -87,9 +87,11 @@ async def search_listings(
     
     # Supabase query parametreleri
     params: Dict[str, str] = {
-        "limit": str(limit), 
+        "limit": str(limit),
         "order": "created_at.desc",
-        "status": "eq.active"  # Default: Only show active listings
+        "status": "eq.active",  # Default: Only show active listings
+        # Join users table to fetch owner name
+        "select": "*,users(name)",
     }
     
     # Filtreler - Supabase PostgREST syntax
@@ -190,6 +192,12 @@ async def search_listings(
         for item in data:
             if not isinstance(item, dict):
                 continue
+            # Extract owner name from joined users table
+            user_obj = item.get("users") if isinstance(item.get("users"), dict) else None
+            item["user_name"] = user_obj.get("name") if user_obj else None
+            # Clean up nested users object if present (optional)
+            if "users" in item:
+                del item["users"]
             imgs = item.get("images") if isinstance(item.get("images"), list) else []
             signed_images = [signed_map[p] for p in imgs if isinstance(p, str) and p in signed_map]
             item["signed_images"] = signed_images
