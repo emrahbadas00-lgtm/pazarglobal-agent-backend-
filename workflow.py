@@ -350,7 +350,7 @@ Extract fields from user message:
 - location → extract city if mentioned (e.g., "Bursa" → location="Bursa"), default "Türkiye"
 - stock → default 1
 - **metadata** → Extract structured data (see rules below - keep it SIMPLE!)
-- **images** → Search conversation for [SYSTEM_MEDIA_NOTE] with MEDIA_PATHS=... → extract the list and store it
+ - **images** → Search conversation for [SYSTEM_MEDIA_NOTE] with MEDIA_PATHS=... → extract the list and store it. **NEVER fabricate placeholders**; if no media_paths exist, keep images empty and photo count 0.
 - **draft_listing_id** → Search conversation for [SYSTEM_MEDIA_NOTE] with DRAFT_LISTING_ID=... → extract UUID and store it
 
 ### 🔄 Draft Editing (User changes price/title/etc BEFORE publishing):
@@ -420,7 +420,7 @@ Show PREVIEW:
 📦 Durum: [condition]
 🏷️ Kategori: [category]
 📍 [location]
-📸 Fotoğraflar: [N adet] (yollar sistemde saklanıyor, yayında görünecek)
+📸 Fotoğraflar: [N adet] (yollar sistemde saklanıyor, yayında görünecek; eğer media_paths yoksa 0 yaz)
 🔧 Metadata: [type, brand if vehicle]
 🆔 Draft ID: [draft_listing_id if extracted]
 
@@ -470,11 +470,13 @@ publishagent = Agent(
    - condition: Extract from "🎨 Durum:" line (default "used" if not found)
    - description: Extract from "📄 Açıklama:" section (everything between that line and next emoji)
    - metadata: Extract JSON from "🔧 Metadata:" section (parse the JSON carefully)
-   - images: CRITICAL! Search full conversation for [SYSTEM_MEDIA_NOTE] with MEDIA_PATHS=[...] → extract list → pass to insert_listing_tool(images=[...])
+    - images: CRITICAL! Search full conversation for [SYSTEM_MEDIA_NOTE] with MEDIA_PATHS=[...] → extract list → pass to insert_listing_tool(images=[...]). **Do NOT invent placeholders; if none found, pass images=None**
    - listing_id: CRITICAL! Search full conversation for [SYSTEM_MEDIA_NOTE] with DRAFT_LISTING_ID=... → extract UUID → pass to insert_listing_tool(listing_id=...)
    - stock: default 1
    
-⚠️ IMPORTANT: If SYSTEM_MEDIA_NOTE exists in conversation but you don't extract images/listing_id, the photos will be LOST!3. If no preview found → "Yayınlanacak bir ilan yok. Önce ürün bilgilerini verin."
+⚠️ IMPORTANT: If SYSTEM_MEDIA_NOTE exists in conversation but you don't extract images/listing_id, the photos will be LOST!
+
+3. If no preview found → "Yayınlanacak bir ilan yok. Önce ürün bilgilerini verin."
 
 ⚠️ CRITICAL EXAMPLE:
 User sees: "📝 İlan önizlemesi: 📱 2020 Renault Clio benzinli manuel 💰 900000 TL ... 🔧 Metadata: {"type":"vehicle","brand":"Renault"...}"
