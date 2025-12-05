@@ -5,6 +5,7 @@ FastAPI wrapper for Agent Builder workflow using OpenAI Agents SDK
 import os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from typing import List, Optional
 import logging
 
 # Import workflow runner
@@ -25,6 +26,9 @@ class AgentRequest(BaseModel):
     user_id: str
     message: str
     conversation_history: list = []
+    media_paths: Optional[List[str]] = None
+    media_type: Optional[str] = None
+    draft_listing_id: Optional[str] = None
 
 
 class AgentResponse(BaseModel):
@@ -65,7 +69,10 @@ async def run_agent_workflow(request: AgentRequest):
         logger.info(f"📚 Conversation history: {len(request.conversation_history)} messages")
         workflow_input = WorkflowInput(
             input_as_text=request.message,
-            conversation_history=request.conversation_history
+            conversation_history=request.conversation_history,
+            media_paths=request.media_paths,
+            media_type=request.media_type,
+            draft_listing_id=request.draft_listing_id
         )
         result = await run_workflow(workflow_input)
         

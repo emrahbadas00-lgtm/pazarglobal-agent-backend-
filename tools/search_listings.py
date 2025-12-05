@@ -1,13 +1,48 @@
 # tools/search_listings.py
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import httpx
 
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "listings")
+
+
+async def generate_signed_urls(paths: List[str], expires_in: int = 3600) -> Dict[str, str]:
+    """
+    Generate signed URLs for private storage objects.
+
+    Args:
+        paths: List of object paths (e.g., userId/listingId/uuid.jpg)
+        expires_in: Expiration in seconds
+
+    Returns:
+        Mapping of path -> signed URL (missing or failed paths are skipped)
+    """
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return {}
+
+    sign_url = f"{SUPABASE_URL}/storage/v1/object/sign/{SUPABASE_STORAGE_BUCKET}"
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {"paths": paths, "expiresIn": expires_in}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(sign_url, json=payload, headers=headers)
+        if not resp.is_success:
+            return {}
+        data = resp.json() or []
+        # Supabase returns list of objects with {signedURL, path}
+        return {item.get("path"): f"{SUPABASE_URL}{item.get('signedURL')}" for item in data if item.get("signedURL")}
+    except Exception:
+        return {}
 
 
 async def search_listings(
@@ -127,19 +162,44 @@ async def search_listings(
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.get(url, params=params, headers=headers)
 
-        if resp.is_success:
-            data = resp.json()
-            return {
-                "success": True,
-                "count": len(data),
-                "results": data,
-            }
-        else:
+        if not resp.is_success:
             return {
                 "success": False,
                 "status": resp.status_code,
                 "error": resp.text,
             }
+
+        data = resp.json()
+
+        # Collect all image paths to sign in one request
+        all_paths: List[str] = []
+        for item in data:
+            imgs = item.get("images") if isinstance(item, dict) else None
+            if isinstance(imgs, list):
+                for p in imgs:
+                    if isinstance(p, str):
+                        all_paths.append(p)
+
+        signed_map: Dict[str, str] = {}
+        if all_paths:
+            # Preserve order but remove duplicates
+            unique_paths = list(dict.fromkeys(all_paths))
+            signed_map = await generate_signed_urls(unique_paths)
+
+        # Attach signed URLs per listing
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            imgs = item.get("images") if isinstance(item.get("images"), list) else []
+            signed_images = [signed_map[p] for p in imgs if isinstance(p, str) and p in signed_map]
+            item["signed_images"] = signed_images
+            item["first_image_signed_url"] = signed_images[0] if signed_images else None
+
+        return {
+            "success": True,
+            "count": len(data),
+            "results": data,
+        }
             
     except httpx.TimeoutException:
         return {

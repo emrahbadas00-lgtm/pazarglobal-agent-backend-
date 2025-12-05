@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from guardrails.runtime import load_config_bundle, instantiate_guardrails, run_guardrails
 from pydantic import BaseModel
 from openai.types.shared.reasoning import Reasoning
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 # Import tool implementations
 from tools.clean_price import clean_price
@@ -47,6 +47,8 @@ async def insert_listing_tool(
     location: Optional[str] = None,
     stock: Optional[int] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    images: Optional[list[str]] = None,
+    listing_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Yeni ilan ekler (Supabase 'listings' tablosuna).
@@ -61,6 +63,8 @@ async def insert_listing_tool(
         location: Lokasyon (opsiyonel)
         stock: Stok adedi (opsiyonel)
         metadata: JSONB metadata
+        images: Supabase storage path list
+        listing_id: Opsiyonel, önceden belirlenmiş UUID (mediayla senkron)
     """
     return await insert_listing(
         title=title,
@@ -71,7 +75,9 @@ async def insert_listing_tool(
         description=description,
         location=location,
         stock=stock,
-        metadata=metadata
+        metadata=metadata,
+        images=images,
+        listing_id=listing_id
     )
 
 
@@ -122,6 +128,7 @@ async def update_listing_tool(
     location: Optional[str] = None,
     stock: Optional[int] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    images: Optional[list[str]] = None,
 ) -> Dict[str, Any]:
     """
     Mevcut ilanı günceller.
@@ -129,6 +136,7 @@ async def update_listing_tool(
     Args:
         listing_id: Güncellenecek ilan ID (zorunlu)
         title, price, condition, category, description, location, stock, metadata: Güncellenecek alanlar
+        images: Güncel fotoğraf path listesi (tam liste gönderilir)
     """
     return await update_listing(
         listing_id=listing_id,
@@ -139,7 +147,8 @@ async def update_listing_tool(
         description=description,
         location=location,
         stock=stock,
-        metadata=metadata
+        metadata=metadata,
+        images=images
     )
 
 
@@ -340,6 +349,8 @@ Extract fields from user message:
 - location → extract city if mentioned (e.g., "Bursa" → location="Bursa"), default "Türkiye"
 - stock → default 1
 - **metadata** → Extract structured data (see rules below - keep it SIMPLE!)
+- **images** → If user shares photo paths/URLs, keep list of storage paths (userId/listingId/uuid.jpg) and remember count (e.g., "3 foto eklendi") in draft preview
+- **draft_listing_id** → If you see a SYSTEM_MEDIA_NOTE with DRAFT_LISTING_ID, keep it for publish step and reuse it in insert_listing_tool(listing_id=...)
 
 ### 🔄 Draft Editing (User changes price/title/etc BEFORE publishing):
 If conversation already contains "📝 İlan önizlemesi" (preview):
@@ -408,7 +419,9 @@ Show PREVIEW:
 📦 Durum: [condition]
 🏷️ Kategori: [category]
 📍 [location]
+ 📸 Fotoğraflar: [N adet] (paths saklanır, link gösterme)
 🔧 Metadata: [type, brand if vehicle]
+ 🆔 Draft ID: [draft_listing_id varsa göster]
 
 ✅ Onaylamak için 'onayla' yazın
 ✏️ Değiştirmek için 'fiyat X olsun' gibi komutlar verin"
@@ -456,6 +469,8 @@ publishagent = Agent(
    - condition: Extract from "🎨 Durum:" line (default "used" if not found)
    - description: Extract from "📄 Açıklama:" section (everything between that line and next emoji)
    - metadata: Extract JSON from "🔧 Metadata:" section (parse the JSON carefully)
+    - images: If preview mentions photo count/paths, include stored images list
+    - listing_id: If SYSTEM_MEDIA_NOTE or preview shows Draft ID, pass it to insert_listing_tool(listing_id=...)
    - stock: default 1
    
 3. If no preview found → "Yayınlanacak bir ilan yok. Önce ürün bilgilerini verin."
@@ -667,9 +682,11 @@ If search returns 0 results:
 
 1️⃣ [title]
    💰 [price] TL | 📍 [location] | [condition]
+    📸 [first image path or signed URL if available, else 'fotoğraf yok']
 
 2️⃣ [title]
    💰 [price] TL | 📍 [location] | [condition]
+    📸 [first image path or signed URL if available, else 'fotoğraf yok']
 ..."
 
 ⚠️ CATEGORY MISMATCH DETECTION:
@@ -739,6 +756,10 @@ updatelistingagent = Agent(
 
 Update user's existing listings with support for metadata updates.
 
+📸 Photo updates:
+- If user says "fotoğraf ekle" or shares new photo paths, merge with existing and send full images list
+- If user says "fotoğraf sil" remove specified paths; send updated images list via update_listing_tool(images=[...])
+
 📋 Flow:
 1. Call list_user_listings_tool
 2. Show listings with current metadata
@@ -782,6 +803,7 @@ User: "vites tipini otomatik yap"
 - Always preserve existing metadata when updating
 - Only update the specific metadata fields user mentions
 - Include metadata parameter when calling update_listing_tool if any product details changed
+ - Include images parameter when photos change (send full list)
 
 Tools available:
 - list_user_listings_tool
@@ -952,6 +974,9 @@ Tools:
 class WorkflowInput(BaseModel):
     input_as_text: str
     conversation_history: list = []  # Previous messages from WhatsApp Bridge
+    media_paths: Optional[List[str]] = None
+    media_type: Optional[str] = None
+    draft_listing_id: Optional[str] = None
 
 
 # Main workflow runner
@@ -1007,6 +1032,23 @@ async def run_workflow(workflow_input: WorkflowInput):
                 }
             ]
         })
+
+        # Attach media/context note so agents see uploaded paths and draft id
+        if workflow.get("media_paths") or workflow.get("draft_listing_id"):
+            media_note_parts = []
+            if workflow.get("draft_listing_id"):
+                media_note_parts.append(f"DRAFT_LISTING_ID={workflow['draft_listing_id']}")
+            if workflow.get("media_paths"):
+                media_note_parts.append(f"MEDIA_PATHS={workflow['media_paths']}")
+            conversation_history.append({
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": f"[SYSTEM_MEDIA_NOTE] {' | '.join(media_note_parts)}"
+                    }
+                ]
+            })
         
         # Run guardrails
         guardrails_input_text = workflow["input_as_text"]

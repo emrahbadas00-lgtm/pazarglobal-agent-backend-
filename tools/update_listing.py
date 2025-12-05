@@ -3,7 +3,7 @@ Update an existing listing in Supabase
 """
 import os
 import httpx
-from typing import Optional
+from typing import Optional, List
 from .suggest_category import suggest_category
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -21,6 +21,7 @@ async def update_listing(
     stock: Optional[int] = None,
     status: Optional[str] = None,
     metadata: Optional[dict] = None,
+    images: Optional[List[str]] = None,
 ) -> dict:
     """
     Update an existing listing in Supabase by listing_id.
@@ -38,6 +39,7 @@ async def update_listing(
         stock: Updated stock quantity (optional)
         status: Updated status: 'draft', 'active', 'sold', 'inactive' (optional)
         metadata: JSONB metadata (type, brand, model, year, etc.) (optional)
+        images: Supabase storage paths list (overwrite with provided list)
     
     Returns:
         dict with:
@@ -73,6 +75,8 @@ async def update_listing(
         payload["status"] = status
     if metadata is not None:
         payload["metadata"] = metadata
+    if images is not None:
+        payload["images"] = images
     
     if not payload:
         return {

@@ -1,7 +1,7 @@
 # tools/insert_listing.py
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import httpx
 from .suggest_category import suggest_category
@@ -21,6 +21,8 @@ async def insert_listing(
     location: Optional[str] = None,
     stock: Optional[int] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    images: Optional[List[str]] = None,
+    listing_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Supabase REST API üzerinden 'listings' tablosuna kayıt ekler.
@@ -35,6 +37,8 @@ async def insert_listing(
         location: Lokasyon
         stock: Stok adedi
         metadata: JSONB metadata (type, brand, model, year, etc.)
+        images: Supabase storage path list (userId/listingId/uuid.jpg)
+        listing_id: Optional predefined UUID (keeps storage path and DB in sync)
         
     Returns:
         Dict içinde success, status ve result anahtarları
@@ -98,6 +102,13 @@ async def insert_listing(
         "status": "active",
         "metadata": metadata,
     }
+
+    if listing_id:
+        payload["id"] = listing_id
+
+    if images is not None:
+        # Persist provided storage paths; DB default handles empty list otherwise
+        payload["images"] = images
 
     headers = {
         "Content-Type": "application/json",
