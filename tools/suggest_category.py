@@ -14,6 +14,7 @@ CATEGORY_KEYWORDS = {
     "Emlak": ["ev", "daire", "dubleks", "villa", "arsa", "işyeri", "ofis", "kiralık", "satılık", "bahçe", "site", "kat", "oda", "salon", "balkon"],
     "Mobilya": ["koltuk", "masa", "sandalye", "dolap", "yatak", "kanepe", "gardırop", "kitaplık", "konsol", "berjer", "köşe takımı"],
     "Giyim": ["ayakkabı", "bot", "spor ayakkabı", "mont", "kaban", "pantolon", "gömlek", "elbise", "takım elbise", "ceket", "tişört"],
+    "Kozmetik & Bakım": ["kolonya", "kolonyağı", "parfüm", "koku", "deodorant", "şampuan", "sabun", "krem", "makyaj", "cilt bakımı", "saç bakımı", "tıraş"],
     "Spor & Outdoor": ["bisiklet", "scooter", "kamp", "çadır", "spor ekipmanı", "fitness", "dağ bisikleti", "kayak", "dalış"],
     "Hobi & Eğlence": ["müzik", "gitar", "piyano", "kitap", "roman", "koleksiyon", "pul", "bozuk para", "oyun"],
     "Anne & Bebek": ["bebek arabası", "mama sandalyesi", "oyuncak", "bebek odası", "emzirme", "bebek giysileri", "biberon"],

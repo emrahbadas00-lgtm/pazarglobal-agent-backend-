@@ -687,11 +687,13 @@ If search returns 0 results:
 
 1️⃣ [title]
    💰 [price] TL | 📍 [location] | [condition]
+   👤 İlan sahibi: [user_name if available, else 'Anonim']
    📸 [Show first_image_signed_url if exists and not placeholder, else 'fotoğraf yok']
    ⚠️ If image path contains 'placeholder' → ignore it, say 'fotoğraf yok'
 
 2️⃣ [title]
    💰 [price] TL | 📍 [location] | [condition]
+   👤 İlan sahibi: [user_name if available, else 'Anonim']
    📸 [Show first_image_signed_url if exists and not placeholder, else 'fotoğraf yok']
 ..."⚠️ CATEGORY MISMATCH DETECTION:
 If you find listings but category doesn't match query intent:
