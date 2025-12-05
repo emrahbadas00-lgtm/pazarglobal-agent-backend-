@@ -345,12 +345,13 @@ Extract fields from user message:
 - condition → "new", "used", "refurbished" (for real estate, default "used")
 - category → **ONLY main category**: "Otomotiv", "Elektronik", "Emlak", "Mobilya", "Giyim"
   ⚠️ CRITICAL: Use ONLY these exact names! No sub-categories like "Emlak – Kiralık Daire"!
+  ⚠️ SUPER CRITICAL: If user says "araba satmak istiyorum" or mentions vehicle (BMW, Citroen, km, vites) → category="Otomotiv"
 - description → keep user's detailed text, translate to friendly Turkish if needed
 - location → extract city if mentioned (e.g., "Bursa" → location="Bursa"), default "Türkiye"
 - stock → default 1
 - **metadata** → Extract structured data (see rules below - keep it SIMPLE!)
-- **images** → If user shares photo paths/URLs, keep list of storage paths (userId/listingId/uuid.jpg) and remember count (e.g., "3 foto eklendi") in draft preview
-- **draft_listing_id** → If you see a SYSTEM_MEDIA_NOTE with DRAFT_LISTING_ID, keep it for publish step and reuse it in insert_listing_tool(listing_id=...)
+- **images** → Search conversation for [SYSTEM_MEDIA_NOTE] with MEDIA_PATHS=... → extract the list and store it
+- **draft_listing_id** → Search conversation for [SYSTEM_MEDIA_NOTE] with DRAFT_LISTING_ID=... → extract UUID and store it
 
 ### 🔄 Draft Editing (User changes price/title/etc BEFORE publishing):
 If conversation already contains "📝 İlan önizlemesi" (preview):
@@ -419,9 +420,9 @@ Show PREVIEW:
 📦 Durum: [condition]
 🏷️ Kategori: [category]
 📍 [location]
- 📸 Fotoğraflar: [N adet] (paths saklanır, link gösterme)
+📸 Fotoğraflar: [N adet] (yollar sistemde saklanıyor, yayında görünecek)
 🔧 Metadata: [type, brand if vehicle]
- 🆔 Draft ID: [draft_listing_id varsa göster]
+🆔 Draft ID: [draft_listing_id if extracted]
 
 ✅ Onaylamak için 'onayla' yazın
 ✏️ Değiştirmek için 'fiyat X olsun' gibi komutlar verin"
@@ -469,11 +470,11 @@ publishagent = Agent(
    - condition: Extract from "🎨 Durum:" line (default "used" if not found)
    - description: Extract from "📄 Açıklama:" section (everything between that line and next emoji)
    - metadata: Extract JSON from "🔧 Metadata:" section (parse the JSON carefully)
-    - images: If preview mentions photo count/paths, include stored images list
-    - listing_id: If SYSTEM_MEDIA_NOTE or preview shows Draft ID, pass it to insert_listing_tool(listing_id=...)
+   - images: CRITICAL! Search full conversation for [SYSTEM_MEDIA_NOTE] with MEDIA_PATHS=[...] → extract list → pass to insert_listing_tool(images=[...])
+   - listing_id: CRITICAL! Search full conversation for [SYSTEM_MEDIA_NOTE] with DRAFT_LISTING_ID=... → extract UUID → pass to insert_listing_tool(listing_id=...)
    - stock: default 1
    
-3. If no preview found → "Yayınlanacak bir ilan yok. Önce ürün bilgilerini verin."
+⚠️ IMPORTANT: If SYSTEM_MEDIA_NOTE exists in conversation but you don't extract images/listing_id, the photos will be LOST!3. If no preview found → "Yayınlanacak bir ilan yok. Önce ürün bilgilerini verin."
 
 ⚠️ CRITICAL EXAMPLE:
 User sees: "📝 İlan önizlemesi: 📱 2020 Renault Clio benzinli manuel 💰 900000 TL ... 🔧 Metadata: {"type":"vehicle","brand":"Renault"...}"
@@ -682,14 +683,13 @@ If search returns 0 results:
 
 1️⃣ [title]
    💰 [price] TL | 📍 [location] | [condition]
-    📸 [first image path or signed URL if available, else 'fotoğraf yok']
+   📸 [Show first_image_signed_url if exists and not placeholder, else 'fotoğraf yok']
+   ⚠️ If image path contains 'placeholder' → ignore it, say 'fotoğraf yok'
 
 2️⃣ [title]
    💰 [price] TL | 📍 [location] | [condition]
-    📸 [first image path or signed URL if available, else 'fotoğraf yok']
-..."
-
-⚠️ CATEGORY MISMATCH DETECTION:
+   📸 [Show first_image_signed_url if exists and not placeholder, else 'fotoğraf yok']
+..."⚠️ CATEGORY MISMATCH DETECTION:
 If you find listings but category doesn't match query intent:
 → Example: User searches "bisiklet" (expect: Spor) but found in "Otomotiv"
 → Show warning:
