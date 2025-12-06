@@ -4,11 +4,13 @@ import os
 from typing import Any, Dict, Optional, List
 
 import httpx
+from urllib.parse import quote
 
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "product-images")
+SUPABASE_STORAGE_PUBLIC = os.getenv("SUPABASE_STORAGE_PUBLIC", "false").lower() in ("1", "true", "yes")
 
 
 async def generate_signed_urls(paths: List[str], expires_in: int = 3600) -> Dict[str, str]:
@@ -24,6 +26,10 @@ async def generate_signed_urls(paths: List[str], expires_in: int = 3600) -> Dict
     """
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return {}
+
+    # If bucket is public, prefer simple public URLs to avoid long signed tokens
+    if SUPABASE_STORAGE_PUBLIC:
+        return {p: f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}/{quote(p)}" for p in paths}
 
     sign_url = f"{SUPABASE_URL}/storage/v1/object/sign/{SUPABASE_STORAGE_BUCKET}"
     headers = {
@@ -46,10 +52,8 @@ async def generate_signed_urls(paths: List[str], expires_in: int = 3600) -> Dict
             path = item.get("path")
             if not signed_url or not path:
                 continue
-            # Some paths contain spaces; Twilio/clients need URL-encoded links
-            full_url = f"{SUPABASE_URL}{signed_url}"
-            full_url = full_url.replace(" ", "%20")
-            signed_map[path] = full_url
+            # Use as returned (already URL-safe); prepend base
+            signed_map[path] = f"{SUPABASE_URL}{signed_url}"
         return signed_map
     except Exception:
         return {}
