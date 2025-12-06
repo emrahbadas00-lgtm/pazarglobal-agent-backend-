@@ -343,9 +343,33 @@ Extract fields from user message:
 - title → brief product/property title (e.g., "3+1 Dublex Bahçe Katı Kiralık Daire" for real estate)
 - price → numeric price (call clean_price_tool if text like "900 bin" or "65000 tl")
 - condition → "new", "used", "refurbished" (for real estate, default "used")
-- category → **ONLY main category**: "Otomotiv", "Elektronik", "Emlak", "Mobilya", "Giyim"
-  ⚠️ CRITICAL: Use ONLY these exact names! No sub-categories like "Emlak – Kiralık Daire"!
-  ⚠️ SUPER CRITICAL: If user says "araba satmak istiyorum" or mentions vehicle (BMW, Citroen, km, vites) → category="Otomotiv"
+- category → **ONLY main category from this list**:
+  📱 "Elektronik" (telefon, bilgisayar, tablet, TV, kamera, kulaklık)
+  🚗 "Otomotiv" (araba, motorsiklet, kamyon, minibüs, otobüs, karavan)
+  🏠 "Emlak" (daire, villa, arsa, iş yeri, kiralık, satılık)
+  🛋️ "Mobilya & Dekorasyon" (koltuk, masa, sandalye, yatak, dolap, aydınlatma)
+  👕 "Giyim & Aksesuar" (kıyafet, ayakkabı, çanta, saat, takı)
+  🍎 "Gıda & İçecek" (sebze, meyve, et, süt ürünleri, içecek, bakliyat, kuruyemiş)
+  💄 "Kozmetik & Kişisel Bakım" (makyaj, cilt bakımı, parfüm, saç bakımı)
+  📚 "Kitap, Dergi & Müzik" (kitap, dergi, CD, vinyl, enstrüman)
+  🏃 "Spor & Outdoor" (spor ekipmanı, bisiklet, kamp malzemeleri, fitness)
+  🧸 "Anne, Bebek & Oyuncak" (bebek arabası, oyuncak, çocuk giyim, bebek bezi)
+  🐕 "Hayvan & Pet Shop" (kedi, köpek, kuş, mama, kafes, akvaryum)
+  🛠️ "Yapı Market & Bahçe" (el aletleri, elektrikli aletler, bahçe mobilyası, bitki)
+  🎮 "Hobi & Oyun" (oyun konsolu, masa oyunu, koleksiyon, drone)
+  🎨 "Sanat & Zanaat" (tablo, heykel, el işi, hobi malzemesi)
+  💼 "İş & Sanayi" (makine, ekipman, forklift, jeneratör)
+  🎓 "Eğitim & Kurs" (dil kursu, meslek kursu, özel ders)
+  🎵 "Etkinlik & Bilet" (konser, tiyatro, spor, festival)
+  🔧 "Hizmetler" (tadilat, temizlik, nakliye, özel ders)
+  📦 "Diğer" (yukarıdaki kategorilere uymayan ürünler)
+  
+  ⚠️ CRITICAL: Use ONLY these exact names! Match product with closest category.
+  ⚠️ Examples:
+     - "patlıcan, domates, meyve" → "Gıda & İçecek"
+     - "araba, BMW, Clio" → "Otomotiv"
+     - "kolonya, şampuan, krem" → "Kozmetik & Kişisel Bakım"
+     - "daire, ev, arsa" → "Emlak"
 - description → keep user's detailed text, translate to friendly Turkish if needed
 - location → extract city if mentioned (e.g., "Bursa" → location="Bursa"), default "Türkiye"
 - stock → default 1
