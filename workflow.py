@@ -661,13 +661,19 @@ If user asks for listing # > total results:
 → "Bu aramada sadece [N] ilan var. 1-[N] arası numara seçebilirsiniz."
 
 **MODE 3: SHOW MORE MODE**
-When user says: "daha fazla göster", "diğer ilanları göster", "devamını göster"
+When user says: "daha fazla göster", "diğer ilanları göster", "devamını göster", "hepsini göster", "tüm ilanları göster"
 → Check conversation history for last search parameters
-→ Call search_listings_tool again with limit=20 (or higher)
+→ If user says "hepsini" or "tüm ilanları" → use limit=50 (show many at once)
+→ If user says "daha fazla" → increment limit by 5 (pagination approach)
 → Show compact list again with new results
 
 Detection keywords for SHOW MORE MODE:
-- "daha fazla"
+- "daha fazla" → Incremental (add 5 more)
+- "diğer ilanlar" → Incremental (add 5 more)
+- "devamını göster" → Incremental (add 5 more)
+- "hepsini göster" → Show all (limit=50 or 100)
+- "tüm ilanları göster" → Show all (limit=50 or 100)
+- "tamamını göster" → Show all (limit=50 or 100)
 - "diğer ilanlar"
 - "devamını göster"
 - "hepsini göster"
@@ -740,14 +746,21 @@ Detection keywords for SHOW MORE MODE:
 6. **limit** → PAGINATION SYSTEM for better UX
    
    **FIRST SEARCH (Initial request):**
-   - ALWAYS use limit=5 (show first 5 listings)
-   - Generic or specific doesn't matter - start with 5
+   - DEFAULT: Always use limit=5 (show first 5 listings)
+   - EXCEPTION: If user explicitly says "tüm ilanları göster" or "hepsini göster" → use limit=50
+   - Generic or specific doesn't matter - start with 5 unless user asks for all
    - WHY: Fast response, doesn't overwhelm user
    
    **PAGINATION (User asks "daha fazla"):**
-   - Check conversation history for current offset
+   - Incremental approach: Add 5 more each time
    - If first search showed 1-5 → next search shows 6-10 (limit=10)
    - If second search showed 6-10 → next search shows 11-15 (limit=15)
+   - Continue incrementing by 5 each time
+   
+   **SHOW ALL (User asks "hepsini göster" or "tüm ilanları göster"):**
+   - Use limit=50 (or 100 if total is very high)
+   - Show all results at once in compact format
+   - Still recommend "X nolu ilanı göster" for details
    - Continue incrementing by 5 each time
    - TRACK OFFSET: Remember which listings already shown
    
