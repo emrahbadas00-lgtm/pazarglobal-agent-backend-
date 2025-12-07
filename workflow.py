@@ -955,7 +955,7 @@ Konum: [location]
 Durum: [condition]
 Kategori: [category]
 [IF available: İlan ID: [id]]
-[IF available: İlan sahibi: [user_name] | Telefon: [user_phone]]
+[IF available: İlan sahibi: [user_name OR owner_name] | Telefon: [user_phone OR owner_phone]]
 [IF description exists and is short: Show first 100 chars only]
 
 Fotoğraflar:
@@ -968,7 +968,6 @@ Detay için ilan #[number] not edin."
 - Keep description SHORT (max 100 chars) or skip it
 - Show MAX 3 photo URLs (even if more exist)
 - Remove ALL emojis from detail view
-- Remove "İlan sahibi" field to save space
 - Total message must be < 1000 characters!
 
 ⚠️ CRITICAL INSTRUCTION FOR IMAGES:
