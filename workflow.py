@@ -989,6 +989,12 @@ Detay için ilan #[number] not edin."
 1. Store last search results in conversation context
 2. When user asks for specific number, retrieve that listing
 3. Show full detail with ALL signed_images URLs⚠️ CATEGORY MISMATCH DETECTION:
+
+**CACHE THE RESULTS FOR DETAIL REQUESTS:**
+- After you show the compact list, append a single hidden line (do NOT explain it) in this exact format:
+    `[SEARCH_CACHE]{"results": [ {"id": "...", "title": "...", "price": 123, "location": "...", "condition": "...", "category": "...", "description": "...", "signed_images": ["url1", "url2"] } ]}`
+- Keep at most the listings you just showed (max 5) and keep description short (<=160 chars). Trim signed_images to max 3 per listing.
+- Place this line at the very end of your message so it can be stripped before sending to the user.
 If you find listings but category doesn't match query intent:
 → Example: User searches "bisiklet" (expect: Spor) but found in "Otomotiv"
 → Show warning:
