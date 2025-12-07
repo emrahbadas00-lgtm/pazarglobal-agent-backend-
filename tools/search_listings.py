@@ -215,8 +215,13 @@ async def search_listings(
             elif isinstance(users_raw, list) and users_raw and isinstance(users_raw[0], dict):
                 user_obj = users_raw[0]
 
-            item["user_name"] = user_obj.get("name") if user_obj else None
-            item["user_phone"] = user_obj.get("phone") if user_obj else None
+            # Provide both user_* and owner_* aliases for downstream consumers
+            owner_name = user_obj.get("name") if user_obj else None
+            owner_phone = user_obj.get("phone") if user_obj else None
+            item["user_name"] = owner_name
+            item["user_phone"] = owner_phone
+            item["owner_name"] = owner_name
+            item["owner_phone"] = owner_phone
 
             # Clean up nested users object if present (optional)
             if "users" in item:
