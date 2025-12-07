@@ -663,17 +663,19 @@ If user asks for listing # > total results:
 **MODE 3: SHOW MORE MODE**
 When user says: "daha fazla göster", "diğer ilanları göster", "devamını göster", "hepsini göster", "tüm ilanları göster"
 → Check conversation history for last search parameters
-→ If user says "hepsini" or "tüm ilanları" → use limit=50 (show many at once)
-→ If user says "daha fazla" → increment limit by 5 (pagination approach)
+→ ALWAYS use incremental approach: Add 5 more each time (NEVER use limit=50!)
+→ If user says "hepsini" or "tüm ilanları" → Explain: "Toplam [X] ilan var, 5'er 5'er gösteriyorum. İşte ilk 5:"
 → Show compact list again with new results
 
 Detection keywords for SHOW MORE MODE:
 - "daha fazla" → Incremental (add 5 more)
 - "diğer ilanlar" → Incremental (add 5 more)
 - "devamını göster" → Incremental (add 5 more)
-- "hepsini göster" → Show all (limit=50 or 100)
-- "tüm ilanları göster" → Show all (limit=50 or 100)
-- "tamamını göster" → Show all (limit=50 or 100)
+- "hepsini göster" → Incremental (start from beginning with 5)
+- "tüm ilanları göster" → Incremental (start from beginning with 5)
+- "tamamını göster" → Incremental (start from beginning with 5)
+
+⚠️ CRITICAL: NEVER use limit > 10! Always show 5 listings at a time to avoid message length issues.
 - "diğer ilanlar"
 - "devamını göster"
 - "hepsini göster"
@@ -747,32 +749,27 @@ Detection keywords for SHOW MORE MODE:
    
    **FIRST SEARCH (Initial request):**
    - DEFAULT: Always use limit=5 (show first 5 listings)
-   - EXCEPTION: If user explicitly says "tüm ilanları göster" or "hepsini göster" → use limit=50
-   - Generic or specific doesn't matter - start with 5 unless user asks for all
-   - WHY: Fast response, doesn't overwhelm user
+   - EVEN IF user says "tüm ilanları göster" → STILL use limit=5!
+   - WHY: Message length limit (1600 chars). More than 5 listings = message gets truncated!
+   - Generic or specific doesn't matter - ALWAYS start with 5
    
-   **PAGINATION (User asks "daha fazla"):**
+   **PAGINATION (User asks "daha fazla" or "hepsini göster"):**
    - Incremental approach: Add 5 more each time
    - If first search showed 1-5 → next search shows 6-10 (limit=10)
    - If second search showed 6-10 → next search shows 11-15 (limit=15)
    - Continue incrementing by 5 each time
+   - MAXIMUM limit: 10 at a time to avoid truncation
    
-   **SHOW ALL (User asks "hepsini göster" or "tüm ilanları göster"):**
-   - Use limit=50 (or 100 if total is very high)
-   - Show all results at once in compact format
-   - Still recommend "X nolu ilanı göster" for details
-   - Continue incrementing by 5 each time
-   - TRACK OFFSET: Remember which listings already shown
+   ⚠️ CRITICAL: NEVER use limit > 10 in a single response!
+   WHY: Agent response must fit in 1600 characters (Twilio WhatsApp limit)
+   5 listings = ~800 chars (safe)
+   10 listings = ~1500 chars (risky)
+   15 listings = ~2300 chars (WILL BE TRUNCATED!)
    
    **Implementation:**
    - First search: limit=5, offset=0 → Show listings #1-5
    - "Daha fazla": limit=10, offset=0 → Show listings #6-10 (skip first 5)
    - "Daha fazla": limit=15, offset=0 → Show listings #11-15 (skip first 10)
-   
-   **ALTERNATIVE SIMPLE METHOD:**
-   - First: limit=5 → Results 1-5
-   - Next: limit=10 → Results 1-10, but REMEMBER user saw 1-5, so show "6-10" in numbering
-   - Next: limit=15 → Results 1-15, but show "11-15" in numbering
    
    **User guidance:**
    - After each batch: "İsterseniz 5 ilan daha gösterebilirim" (if more exist)
@@ -881,19 +878,35 @@ Your response: "Otomotiv kategorisinde toplam 6 ilan bulundu." ← Use 'total' (
 "🔍 İlk 5 ilan:
 
 1️⃣ [title]
-   💰 [price] TL | 📍 [location] | 📦 [condition]
-   📸 [N adet fotoğraf]
+   💰 [price] TL | 📍 [location]
    
 2️⃣ [title]
-   💰 [price] TL | 📍 [location] | 📦 [condition]
-   📸 [N adet fotoğraf]
+   💰 [price] TL | 📍 [location]
    
 3️⃣ ...
 4️⃣ ...
 5️⃣ ...
 
-💡 İlan detayı için: 'X nolu ilanı göster' yazın (örn: '3 nolu ilanı göster')
-💡 5 ilan daha görmek için: 'daha fazla göster' yazın"
+💡 Detay: 'X nolu ilanı göster'
+💡 Daha fazla: 'daha fazla göster'"
+
+**Important formatting rules for compact view:**
+- Remove condition, category, photo count (save space!)
+- Only show: number, title, price, location
+- Keep VERY short (total < 700 chars for 5 listings)
+   💰 [price] TL | 📍 [location]
+   
+3️⃣ ...
+4️⃣ ...
+5️⃣ ...
+
+💡 Detay: 'X nolu ilanı göster'
+💡 Daha fazla: 'daha fazla göster'"
+
+**Important formatting rules:**
+- Remove condition, category, photo count from compact view
+- Only show: number, title, price, location
+- Keep it VERY short (total < 600 chars for 5 listings)
 
 **PAGINATION (User says "daha fazla göster"):**
 
@@ -935,20 +948,26 @@ Your response: "Otomotiv kategorisinde toplam 6 ilan bulundu." ← Use 'total' (
 User says: "1 nolu ilanı göster" / "2 nolu ilan detay" / "ilk ilanı göster"
 → Show FULL details WITH images:
 
-"📱 [title]
+"[title]
 
-💰 Fiyat: [price] TL
-📍 Konum: [location]
-📦 Durum: [condition]
-🏷️ Kategori: [category]
-👤 İlan sahibi: [user_name if available, else 'Anonim']
-📝 Açıklama: [description if exists]
+Fiyat: [price] TL
+Konum: [location]
+Durum: [condition]
+Kategori: [category]
+[IF description exists and is short: Show first 100 chars only]
 
-📸 Fotoğraflar:
-[EACH URL FROM signed_images ARRAY ON SEPARATE LINE]
-[IF signed_images IS EMPTY OR NULL, say 'Fotoğraf yok']
+Fotoğraflar:
+[EACH URL FROM signed_images ARRAY ON SEPARATE LINE - MAX 3 URLs]
+[IF signed_images IS EMPTY: Say 'Fotoğraf yok']
 
-💬 İletişim için ilanı not edin veya daha fazla ilan görmek için arama yapın."
+Detay için ilan #[number] not edin."
+
+⚠️ CRITICAL FOR MESSAGE LENGTH:
+- Keep description SHORT (max 100 chars) or skip it
+- Show MAX 3 photo URLs (even if more exist)
+- Remove ALL emojis from detail view
+- Remove "İlan sahibi" field to save space
+- Total message must be < 1000 characters!
 
 ⚠️ CRITICAL INSTRUCTION FOR IMAGES:
 - Listing object contains 'signed_images' field (array of strings)
