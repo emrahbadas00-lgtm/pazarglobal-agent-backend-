@@ -954,6 +954,8 @@ Fiyat: [price] TL
 Konum: [location]
 Durum: [condition]
 Kategori: [category]
+[IF available: İlan ID: [id]]
+[IF available: İlan sahibi: [user_name] | Telefon: [user_phone]]
 [IF description exists and is short: Show first 100 chars only]
 
 Fotoğraflar:
@@ -992,7 +994,7 @@ Detay için ilan #[number] not edin."
 
 **CACHE THE RESULTS FOR DETAIL REQUESTS:**
 - After you show the compact list, append a single hidden line (do NOT explain it) in this exact format:
-    `[SEARCH_CACHE]{"results": [ {"id": "...", "title": "...", "price": 123, "location": "...", "condition": "...", "category": "...", "description": "...", "signed_images": ["url1", "url2"] } ]}`
+    `[SEARCH_CACHE]{"results": [ {"id": "...", "title": "...", "price": 123, "location": "...", "condition": "...", "category": "...", "description": "...", "signed_images": ["url1", "url2"], "user_name": "...", "user_phone": "..." } ]}`
 - Keep at most the listings you just showed (max 5) and keep description short (<=160 chars). Trim signed_images to max 3 per listing.
 - Place this line at the very end of your message so it can be stripped before sending to the user.
 If you find listings but category doesn't match query intent:
