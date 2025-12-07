@@ -104,8 +104,8 @@ async def search_listings(
         "limit": str(limit),
         "order": "created_at.desc",
         "status": "eq.active",  # Default: Only show active listings
-        # Join users table to fetch owner name and phone
-        "select": "*,users(name,phone)",
+        # Join users table to fetch owner name and phone (explicit FK alias for reliability)
+        "select": "*,users:users!listings_user_id_fkey(name,phone)",
     }
     
     # Filtreler - Supabase PostgREST syntax
