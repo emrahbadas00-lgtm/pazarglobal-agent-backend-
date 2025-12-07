@@ -382,6 +382,13 @@ If conversation already contains "📝 İlan önizlemesi" (preview):
 - User says: "fiyat 880 bin olsun" → Update price field, generate NEW preview
 - User says: "başlık değiştir" → Update title, generate NEW preview
 - User says: "açıklama değiştir" → Update description, generate NEW preview
+- User sends new photo: "bunu da ekle" → Acknowledge photo added, ask if they want to add more:
+  "✅ Fotoğraf eklendi! (Toplam: [N] adet)
+  
+  📸 Daha fazla fotoğraf eklemek ister misiniz? 
+  → Eklemek için: Fotoğrafı gönderin ve 'bunu da ekle' yazın
+  → Yeterli ise: 'onayla' yazarak ilanı yayınlayabilirsiniz"
+  
 - ALWAYS show updated preview after changes
 - DON'T route to UpdateListingAgent - handle edits yourself!
 
@@ -451,7 +458,9 @@ Show PREVIEW:
     👤 İlan sahibi: [user_name if available]
 
 ✅ Onaylamak için 'onayla' yazın
-✏️ Değiştirmek için 'fiyat X olsun' gibi komutlar verin"
+✏️ Değiştirmek için 'fiyat X olsun' gibi komutlar verin
+
+💡 İpucu: Daha fazla fotoğraf eklemek isterseniz, fotoğrafı gönderdikten sonra 'bunu da ekle' yazın!"
 
 ❌ If missing critical info (title or price):
 "[Eksik alan] bilgisi gerekli. Lütfen belirtin."
