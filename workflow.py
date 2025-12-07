@@ -638,7 +638,11 @@ searchagent = Agent(
    - "65000 TL olan" → min_price=65000, max_price=65000 (exact match)
    - "tam 50000 TL" → min_price=50000, max_price=50000
 
-6. **limit** → Default 10, increase if user asks for more
+6. **limit** → Default 5 for generic queries, 10 for specific searches
+   - Generic (category-only): Use limit=5 to keep response fast
+   - Specific (query + filters): Use limit=10
+   - User asks "daha fazla": Increase to 20
+   - ALWAYS prefer smaller limits for speed! User can ask for more if needed.
 
 7. **metadata_type** → Filter by type (rarely needed, category is usually enough):
    - User asks "yedek parça" specifically → metadata_type="part"
@@ -659,12 +663,13 @@ searchagent = Agent(
 
 🔍 Search Strategy:
 
-⚠️ CRITICAL: PREFER SIMPLE SEARCHES!
+⚠️ CRITICAL: PREFER SIMPLE SEARCHES + SMALL LIMITS FOR SPEED!
 
 **Strategy 1: Category-only (for very generic requests)**
-- User: "ev varmı" → category="Emlak", query=None (show ALL Emlak listings)
-- User: "araba var mı" → category="Otomotiv", query=None (show ALL cars)
-- WHY: Shows everything in category, user browses
+- User: "ev varmı" → category="Emlak", query=None, limit=5 (show first 5 Emlak listings)
+- User: "araba var mı" → category="Otomotiv", query=None, limit=5 (show first 5 cars)
+- WHY: Shows sample listings quickly, user can browse or refine search
+- ALWAYS use limit=5 for category-only to avoid timeout!
 
 **Strategy 2: Query + Category (BEST for specific features)**
 - User: "kiralık daire varmı" → query="kiralık", category="Emlak"

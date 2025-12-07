@@ -40,7 +40,7 @@ async def generate_signed_urls(paths: List[str], expires_in: int = 3600) -> Dict
     payload = {"paths": paths, "expiresIn": expires_in}
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(sign_url, json=payload, headers=headers)
         if not resp.is_success:
             return {}
@@ -175,7 +175,7 @@ async def search_listings(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=45.0) as client:
             resp = await client.get(url, params=params, headers=headers)
 
         if not resp.is_success:
