@@ -172,6 +172,7 @@ async def search_listings(
     headers = {
         "apikey": SUPABASE_SERVICE_KEY,
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Prefer": "count=exact",  # Get total count in Content-Range header
     }
 
     try:
@@ -217,9 +218,19 @@ async def search_listings(
             item["signed_images"] = signed_images
             item["first_image_signed_url"] = signed_images[0] if signed_images else None
 
+        # Get total count from Content-Range header if available
+        total_count = len(data)
+        content_range = resp.headers.get("content-range")
+        if content_range:
+            # Format: "0-9/total" or "*/total"
+            parts = content_range.split("/")
+            if len(parts) == 2 and parts[1].isdigit():
+                total_count = int(parts[1])
+        
         return {
             "success": True,
-            "count": len(data),
+            "count": len(data),  # Number of results returned in this response
+            "total": total_count,  # Total number of matching listings (might be > count)
             "results": data,
         }
             
