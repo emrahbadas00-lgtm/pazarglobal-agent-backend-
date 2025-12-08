@@ -148,16 +148,14 @@ async def web_chat_endpoint(request: AgentRequest):
                 result = await run_workflow(workflow_input)
                 
                 if "error" in result:
-                    yield f"data: {json.dumps({'type': 'error', 'content': result['error']})}
-
-"
+                    error_data = {"type": "error", "content": result["error"]}
+                    yield f"data: {json.dumps(error_data)}\n\n"
                     return
                 
                 response_text = result.get("response", "")
                 if not response_text:
-                    yield f"data: {json.dumps({'type': 'error', 'content': 'Empty response'})}
-
-"
+                    error_data = {"type": "error", "content": "Empty response"}
+                    yield f"data: {json.dumps(error_data)}\n\n"
                     return
                 
                 logger.info(f"✅ Web workflow completed: intent={result['intent']}")
@@ -167,22 +165,18 @@ async def web_chat_endpoint(request: AgentRequest):
                 for i, word in enumerate(words):
                     chunk = word if i == 0 else f" {word}"
                     data = {"type": "text", "content": chunk}
-                    yield f"data: {json.dumps(data)}
-
-"
+                    yield f"data: {json.dumps(data)}\n\n"
                     await asyncio.sleep(0.02)  # 20ms delay
                 
                 # Send completion signal
-                yield f"data: {json.dumps({'type': 'done'})}
-
-"
+                done_data = {"type": "done"}
+                yield f"data: {json.dumps(done_data)}\n\n"
                 
             except Exception as e:
                 logger.error(f"❌ SSE stream error: {str(e)}")
                 logger.exception(e)
-                yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}
-
-"
+                error_data = {"type": "error", "content": str(e)}
+                yield f"data: {json.dumps(error_data)}\n\n"
         
         return StreamingResponse(
             generate_sse_stream(),
