@@ -194,6 +194,7 @@ async def update_listing_tool(
     """
     return await update_listing(
         listing_id=listing_id,
+        user_id=CURRENT_REQUEST_USER_ID,
         title=title,
         price=price,
         condition=condition,
@@ -214,12 +215,12 @@ async def delete_listing_tool(listing_id: str) -> Dict[str, Any]:
     Args:
         listing_id: Silinecek ilan ID (zorunlu)
     """
-    return await delete_listing(listing_id=listing_id)
+    return await delete_listing(listing_id=listing_id, user_id=CURRENT_REQUEST_USER_ID)
 
 
 @function_tool
 async def list_user_listings_tool(
-    user_id: str,
+    user_id: Optional[str] = None,
     limit: int = 20
 ) -> Dict[str, Any]:
     """
@@ -229,7 +230,8 @@ async def list_user_listings_tool(
         user_id: Kullanıcı UUID (zorunlu)
         limit: Sonuç sayısı limiti
     """
-    return await list_user_listings(user_id=user_id, limit=limit)
+    resolved_user = user_id or CURRENT_REQUEST_USER_ID
+    return await list_user_listings(user_id=resolved_user, limit=limit)
 
 
 # Shared client for guardrails
@@ -1302,6 +1304,11 @@ class WorkflowInput(BaseModel):
     media_type: Optional[str] = None
     draft_listing_id: Optional[str] = None
     user_name: Optional[str] = None  # User's full name from Supabase profiles
+    user_id: Optional[str] = None    # Authenticated user id for ownership checks
+
+
+# Per-request context (set in run_workflow)
+CURRENT_REQUEST_USER_ID: Optional[str] = None
 
 
 # Main workflow runner
@@ -1311,6 +1318,8 @@ async def run_workflow(workflow_input: WorkflowInput):
     Uses OpenAI Agents SDK with MCP tools
     """
     with trace("PazarGlobal"):
+        global CURRENT_REQUEST_USER_ID
+        CURRENT_REQUEST_USER_ID = workflow_input.user_id
         workflow = workflow_input.model_dump()
         
         # Build conversation history from previous messages

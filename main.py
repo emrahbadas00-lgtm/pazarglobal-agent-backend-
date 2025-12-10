@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import logging
 import json
 import asyncio
@@ -49,6 +49,8 @@ class AgentRequest(BaseModel):
     media_paths: Optional[List[str]] = None
     media_type: Optional[str] = None
     draft_listing_id: Optional[str] = None
+    session_token: Optional[str] = None
+    user_context: Optional[Dict[str, Any]] = None
 
 
 class AgentResponse(BaseModel):
@@ -86,7 +88,11 @@ async def run_agent_workflow(request: AgentRequest):
     
     # Get user profile from Supabase if phone provided
     user_name = None
-    if request.phone:
+    # Prefer explicit user_name from user_context
+    if request.user_context and request.user_context.get("name"):
+        user_name = request.user_context.get("name")
+
+    if not user_name and request.phone:
         try:
             import httpx
             supabase_url = os.getenv("SUPABASE_URL")
@@ -123,7 +129,8 @@ async def run_agent_workflow(request: AgentRequest):
             media_paths=request.media_paths,
             media_type=request.media_type,
             draft_listing_id=request.draft_listing_id,
-            user_name=user_name  # Pass user name to workflow
+            user_name=user_name,  # Pass user name to workflow
+            user_id=request.user_id,
         )
         result = await run_workflow(workflow_input)
         
@@ -163,6 +170,45 @@ async def web_chat_endpoint(request: AgentRequest):
     data: {"type":"done"}
     """
     logger.info(f"💬 Web chat request from user_id={request.user_id}: {request.message[:100]}")
+
+    # Resolve user profile from Supabase for personalization and authorization
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
+    profile_full_name = None
+    owned_listing_ids: list[str] = []
+    user_phone = request.user_context.get("phone") if request.user_context else None
+
+    if supabase_url and supabase_key:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # Fetch profile by user_id
+                profile_resp = await client.get(
+                    f"{supabase_url}/rest/v1/profiles",
+                    params={"id": f"eq.{request.user_id}", "select": "full_name, phone"},
+                    headers={
+                        "apikey": supabase_key,
+                        "Authorization": f"Bearer {supabase_key}"
+                    },
+                )
+                if profile_resp.is_success and profile_resp.json():
+                    profile = profile_resp.json()[0]
+                    profile_full_name = profile.get("full_name")
+                    user_phone = user_phone or profile.get("phone")
+
+                # Fetch owned listings for authorization context
+                listings_resp = await client.get(
+                    f"{supabase_url}/rest/v1/listings",
+                    params={"user_id": f"eq.{request.user_id}", "select": "id", "limit": 200},
+                    headers={
+                        "apikey": supabase_key,
+                        "Authorization": f"Bearer {supabase_key}"
+                    },
+                )
+                if listings_resp.is_success:
+                    owned_listing_ids = [item.get("id") for item in listings_resp.json() if item.get("id")]
+        except Exception as e:
+            logger.error(f"❌ Profile/listings fetch failed: {e}")
     
     try:
         async def generate_sse_stream():
@@ -170,12 +216,31 @@ async def web_chat_endpoint(request: AgentRequest):
             try:
                 # Run workflow
                 logger.info(f"📚 Web conversation history: {len(request.conversation_history)} messages")
+                # Build auth context note for the agent
+                auth_note_parts = [
+                    f"user_id={request.user_id}",
+                    f"name={profile_full_name or (request.user_context.get('name') if request.user_context else '')}",
+                    f"email={(request.user_context.get('email') if request.user_context else '')}",
+                    f"phone={user_phone or (request.user_context.get('phone') if request.user_context else '')}",
+                    f"owned_listing_ids={owned_listing_ids}"
+                ]
+                auth_note = "[AUTH_CONTEXT] " + " | ".join(filter(None, auth_note_parts)) + " | KURAL: Sadece owned_listing_ids listesindeki ilanlar üzerinde güncelle/sil yap. Diğer ilanlara sadece görüntüleme izni var."
+
+                enriched_history = request.conversation_history + [
+                    {
+                        "role": "assistant",
+                        "content": auth_note
+                    }
+                ]
+
                 workflow_input = WorkflowInput(
                     input_as_text=request.message,
-                    conversation_history=request.conversation_history,
+                    conversation_history=enriched_history,
                     media_paths=request.media_paths,
                     media_type=request.media_type,
-                    draft_listing_id=request.draft_listing_id
+                    draft_listing_id=request.draft_listing_id,
+                    user_name=profile_full_name,
+                    user_id=request.user_id,
                 )
                 result = await run_workflow(workflow_input)
                 
