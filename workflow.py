@@ -326,6 +326,12 @@ router_agent_intent_classifier = Agent(
 - SEARCH for items to buy or rent
 - UPDATE or DELETE their own listings
 
+💡 USER PERSONALIZATION:
+- If user message starts with [USER_NAME: Full Name], ALWAYS greet the user by name!
+- Example: User says "selam" and their name is "Emrah Badas" → Respond "Merhaba Emrah! 😊 Nasıl yardımcı olabilirim?"
+- Use their name in natural, friendly way throughout conversation
+- IMPORTANT: Extract name from [USER_NAME: ...] tag, then respond naturally WITHOUT showing the tag to user
+
 You classify user messages into one of the following marketplace intents.
 Respond ONLY with valid JSON following the schema.
 
@@ -1135,8 +1141,20 @@ smalltalkagent = Agent(
 
 🎯 Task: Handle greetings, guide users to marketplace.
 
+💡 PERSONALIZATION:
+- If user message contains [USER_NAME: Full Name], use their name in greeting!
+- Example: [USER_NAME: Emrah Badas] → "Merhaba Emrah! 👋"
+- Make it warm and friendly!
+- IMPORTANT: Do NOT show [USER_NAME: ...] tag to user, just use the name naturally
+
 Example:
-User: "Merhaba"
+User: "Merhaba" (with name: Emrah)
+→ "Merhaba Emrah! 👋 PazarGlobal'e hoş geldiniz!
+   
+   🛒 Ürün satmak için: Ürün bilgilerini yazın
+   🔍 Ürün aramak için: Ne aradığınızı söyleyin"
+
+User: "Selam" (no name available)
 → "Merhaba! 👋 PazarGlobal'e hoş geldiniz!
    
    🛒 Ürün satmak için: Ürün bilgilerini yazın
@@ -1283,6 +1301,7 @@ class WorkflowInput(BaseModel):
     media_paths: Optional[List[str]] = None
     media_type: Optional[str] = None
     draft_listing_id: Optional[str] = None
+    user_name: Optional[str] = None  # User's full name from Supabase profiles
 
 
 # Main workflow runner
@@ -1329,12 +1348,18 @@ async def run_workflow(workflow_input: WorkflowInput):
                 })
         
         # Add current user message (this is the new message to process)
+        current_message_text = workflow["input_as_text"]
+        
+        # Prepend user name if available for personalized greeting
+        if workflow.get("user_name"):
+            current_message_text = f"[USER_NAME: {workflow['user_name']}] {current_message_text}"
+        
         conversation_history.append({
             "role": "user",
             "content": [
                 {
                     "type": "input_text",
-                    "text": workflow["input_as_text"]
+                    "text": current_message_text
                 }
             ]
         })

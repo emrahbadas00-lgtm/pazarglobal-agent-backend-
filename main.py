@@ -43,6 +43,7 @@ MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "https://pazarglobal-production.up.
 class AgentRequest(BaseModel):
     """Request format for agent workflow"""
     user_id: str
+    phone: Optional[str] = None  # WhatsApp phone number for user lookup
     message: str
     conversation_history: list = []
     media_paths: Optional[List[str]] = None
@@ -83,6 +84,36 @@ async def run_agent_workflow(request: AgentRequest):
     logger.info(f"🎯 Running agent workflow for user: {request.user_id}")
     logger.info(f"📝 Message: {request.message}")
     
+    # Get user profile from Supabase if phone provided
+    user_name = None
+    if request.phone:
+        try:
+            import httpx
+            supabase_url = os.getenv("SUPABASE_URL")
+            supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
+            
+            async with httpx.AsyncClient() as client:
+                # Clean phone number (remove 'whatsapp:' prefix if present)
+                clean_phone = request.phone.replace('whatsapp:', '').strip()
+                
+                # Query profiles table by phone
+                profile_url = f"{supabase_url}/rest/v1/profiles"
+                headers = {
+                    "apikey": supabase_key,
+                    "Authorization": f"Bearer {supabase_key}"
+                }
+                params = {"phone": f"eq.{clean_phone}", "select": "full_name"}
+                
+                resp = await client.get(profile_url, headers=headers, params=params)
+                if resp.is_success and resp.json():
+                    profile = resp.json()[0]
+                    user_name = profile.get("full_name")
+                    logger.info(f"👤 User profile found: {user_name}")
+                else:
+                    logger.warning(f"⚠️ No profile found for phone: {clean_phone}")
+        except Exception as e:
+            logger.error(f"❌ Error fetching user profile: {str(e)}")
+    
     try:
         # Run workflow using Agents SDK
         logger.info(f"📚 Conversation history: {len(request.conversation_history)} messages")
@@ -91,7 +122,8 @@ async def run_agent_workflow(request: AgentRequest):
             conversation_history=request.conversation_history,
             media_paths=request.media_paths,
             media_type=request.media_type,
-            draft_listing_id=request.draft_listing_id
+            draft_listing_id=request.draft_listing_id,
+            user_name=user_name  # Pass user name to workflow
         )
         result = await run_workflow(workflow_input)
         
