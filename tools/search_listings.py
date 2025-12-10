@@ -104,8 +104,8 @@ async def search_listings(
         "limit": str(limit),
         "order": "created_at.desc",
         "status": "eq.active",  # Default: Only show active listings
-        # Select all fields (user_name and user_phone already in listings table)
-        "select": "*",
+        # Join profiles table to get user info (full_name, phone)
+        "select": "*,profiles:profiles!listings_user_id_fkey(full_name,phone)",
     }
     
     # Filtreler - Supabase PostgREST syntax
@@ -208,12 +208,27 @@ async def search_listings(
             if not isinstance(item, dict):
                 continue
             
-            # User info already in listings table (user_name, user_phone)
-            # Provide owner_* aliases for backward compatibility
-            owner_name = item.get("user_name")
-            owner_phone = item.get("user_phone")
+            # Extract user info from joined profiles table
+            profiles_data = item.get("profiles")
+            user_obj = None
+            
+            if isinstance(profiles_data, dict):
+                user_obj = profiles_data
+            elif isinstance(profiles_data, list) and profiles_data and isinstance(profiles_data[0], dict):
+                user_obj = profiles_data[0]
+            
+            # Set user_* and owner_* fields for backward compatibility
+            owner_name = user_obj.get("full_name") if user_obj else None
+            owner_phone = user_obj.get("phone") if user_obj else None
+            
+            item["user_name"] = owner_name
+            item["user_phone"] = owner_phone
             item["owner_name"] = owner_name
             item["owner_phone"] = owner_phone
+            
+            # Clean up nested profiles object
+            if "profiles" in item:
+                del item["profiles"]
 
             imgs = item.get("images") if isinstance(item.get("images"), list) else []
             signed_images = [signed_map[p] for p in imgs if isinstance(p, str) and p in signed_map]
