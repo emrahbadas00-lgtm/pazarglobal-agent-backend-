@@ -60,6 +60,19 @@ class AgentResponse(BaseModel):
     success: bool
 
 
+class SpeechCorrectionRequest(BaseModel):
+    """Request for speech text correction"""
+    text: str
+    user_id: Optional[str] = None
+
+
+class SpeechCorrectionResponse(BaseModel):
+    """Response with corrected speech text"""
+    original: str
+    corrected: str
+    changes_made: bool
+
+
 @app.get("/")
 async def root():
     """Health check endpoint"""
@@ -289,6 +302,81 @@ async def web_chat_endpoint(request: AgentRequest):
         logger.error(f"❌ Web chat endpoint error: {str(e)}")
         logger.exception(e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/correct-speech", response_model=SpeechCorrectionResponse)
+async def correct_speech(request: SpeechCorrectionRequest):
+    """
+    Speech Gateway - Text Correction Endpoint
+    
+    Takes raw speech-to-text output and corrects:
+    - Spelling errors
+    - Missing punctuation
+    - Grammar issues
+    - Filler words (eee, şey, ııı)
+    - Contextual errors
+    
+    Uses GPT-4o-mini for cost-effective, fast correction.
+    """
+    logger.info(f"🎤 Speech correction request from user: {request.user_id or 'anonymous'}")
+    logger.info(f"📝 Original text: {request.text}")
+    
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        
+        correction_prompt = f"""Sen otomatik konuşma tanıma (STT) sisteminden gelen Türkçe metinleri düzelten bir asistansın.
+
+GÖREVIN:
+- Yazım hatalarını düzelt
+- Noktalama işaretleri ekle
+- Bağlama göre yanlış algılanan kelimeleri düzelt
+- Dolgu kelimelerini kaldır (eee, şey, ııı, hmm, işte)
+- Doğal Türkçe cümle yapısına çevir
+- Anlam değiştirme, sadece düzelt
+
+KURALLAR:
+- Sayıları rakamlarla yaz (otuz bin → 30000, beşyüz → 500)
+- Fiyatları doğru formatla (otuz bin lira → 30000 TL)
+- Kısa ve öz tut
+- Sadece düzeltilmiş metni döndür, açıklama yapma
+
+HAM METİN:
+{request.text}
+
+DÜZELTİLMİŞ METİN:"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Sen hızlı ve doğru metin düzelten bir asistansın. Sadece düzeltilmiş metni döndür."},
+                {"role": "user", "content": correction_prompt}
+            ],
+            max_tokens=150,
+            temperature=0.3  # Low temperature for consistent corrections
+        )
+        
+        corrected_text = response.choices[0].message.content.strip()
+        changes_made = corrected_text.lower() != request.text.lower()
+        
+        logger.info(f"✅ Corrected text: {corrected_text}")
+        logger.info(f"🔄 Changes made: {changes_made}")
+        
+        return SpeechCorrectionResponse(
+            original=request.text,
+            corrected=corrected_text,
+            changes_made=changes_made
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Speech correction error: {str(e)}")
+        logger.exception(e)
+        # Fallback: return original text if correction fails
+        return SpeechCorrectionResponse(
+            original=request.text,
+            corrected=request.text,
+            changes_made=False
+        )
 
 
 @app.get("/health")
