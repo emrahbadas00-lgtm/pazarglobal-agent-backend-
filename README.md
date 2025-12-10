@@ -1,61 +1,416 @@
-# Pazarglobal Agent Backend
+# 🤖 PazarGlobal Agent Backend
 
-Python agent backend implementing Agent Builder workflow from OpenAI.
+**AI-Powered Multi-Agent Listing Platform - Core Backend**
 
-## Architecture
+Modern AI destekli ilan platformu PazarGlobal'in ana backend servisi. OpenAI Agents SDK kullanarak çok-ajanlı (multi-agent) mimari ile kullanıcı isteklerini işler, ilanları yönetir ve akıllı sohbet deneyimi sağlar.
+
+---
+
+## 📋 İçindekiler
+
+- [Mimari Genel Bakış](#-mimari-genel-bakış)
+- [Agent Yapısı](#-agent-yapısı)
+- [Tools (Araçlar)](#-tools-araçlar)
+- [API Endpoints](#-api-endpoints)
+- [Kurulum](#-kurulum)
+- [Railway Deployment](#-railway-deployment)
+- [Environment Variables](#-environment-variables)
+- [Workflow Detayları](#-workflow-detayları)
+- [Güvenlik](#-güvenlik)
+- [Gelecek Özellikler](#-gelecek-özellikler)
+- [Sorun Giderme](#-sorun-giderme)
+
+---
+
+## 🏗️ Mimari Genel Bakış
 
 ```
-WhatsApp (Twilio)
-      ↓
-WhatsApp Bridge (Railway)
-      ↓
-Agent Backend (this project) ← You are here
-      ↓
-MCP Server (Railway) → Supabase
+┌─────────────────────────────────────────────────────────────┐
+│                  PazarGlobal Agent Backend                  │
+│                     (Ana Çekirdek)                          │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  WhatsApp Bridge ──┐                                        │
+│                    ├──► POST /agent/run ──► Workflow       │
+│  Web Frontend ─────┘                        Runner         │
+│                                                ↓            │
+│                                         RouterAgent        │
+│                                         (Intent Classifier) │
+│                                                ↓            │
+│              ┌──────────────┬──────────────┬──────────┐     │
+│              ↓              ↓              ↓          ↓     │
+│         CreateListing  SearchAgent  UpdateListing  Delete  │
+│              ↓              ↓              ↓          ↓     │
+│              └──────────────┴──────────────┴──────────┘     │
+│                              ↓                              │
+│                      Native Function Tools                  │
+│                              ↓                              │
+│                      Supabase Database                      │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## Features
+**Teknoloji Stack:**
+- **Framework:** FastAPI 0.109+
+- **AI Engine:** OpenAI Agents SDK (Agent Builder)
+- **Model:** GPT-4 (configurable via ModelSettings)
+- **Database:** Supabase (PostgreSQL)
+- **Storage:** Supabase Storage (product-images bucket)
+- **Deployment:** Railway
+- **Language:** Python 3.11+
 
-- **RouterAgent**: Classifies user intent (create, update, delete, search, etc.)
-- **CreateListingAgent**: Prepares new listing
-- **PublishAgent**: Inserts listing to database
-- **UpdateListingAgent**: Updates existing listings
-- **DeleteListingAgent**: Deletes listings
-- **SearchAgent**: Searches products
-- **SmallTalkAgent**: Handles greetings
-- **CancelAgent**: Cancels operations
+---
 
-## Quick Start
+## 🎯 Agent Yapısı
 
-### 1. Install Dependencies
+### 1. **RouterAgent** (Intent Classifier)
+**Görev:** Kullanıcı mesajını analiz ederek hangi specialized agent'a yönlendireceğine karar verir.
 
+**Intent Types:**
+- `create_listing` - Yeni ilan oluşturma
+- `search_listing` - İlan arama
+- `update_listing` - Mevcut ilan güncelleme
+- `delete_listing` - İlan silme
+- `view_my_listings` - Kullanıcının ilanlarını listeleme
+- `small_talk` - Selamlaşma, genel sohbet
+- `cancel` - İşlem iptali
+
+**Örnek:**
+```
+Kullanıcı: "iPhone 13 satıyorum 25 bin TL"
+RouterAgent → Intent: create_listing → CreateListingAgent
+```
+
+---
+
+### 2. **CreateListingAgent** (İlan Hazırlama)
+**Görev:** Kullanıcıdan ilan bilgilerini toplar ve taslak hazırlar.
+
+**Akış:**
+1. Kullanıcıdan bilgi topla (başlık, fiyat, kategori, durum, açıklama)
+2. `clean_price_tool` ile fiyat temizle
+3. `suggest_category_tool` ile kategori öner
+4. Taslağı conversation context'e kaydet
+5. Kullanıcıya önizleme göster
+6. Onay alınca → **PublishAgent**'a yönlendir
+
+**Önemli:** CreateListingAgent asla `insert_listing_tool` çağırmaz - bu PublishAgent'ın işidir!
+
+**Metadata Özellikleri:**
+- **Elektronik:** `brand`, `model`, `screen_size`, `storage`, `ram`
+- **Otomotiv:** `make`, `model`, `year`, `km`, `fuel_type`, `transmission`
+- **Emlak:** `property_type`, `rooms`, `m2`, `floor`, `heating`
+- **Moda:** `brand`, `size`, `color`, `material`, `gender`
+
+---
+
+### 3. **PublishAgent** (Veritabanına Kayıt)
+**Görev:** CreateListingAgent'ın hazırladığı taslağı Supabase'e kaydeder.
+
+**Akış:**
+1. Conversation context'ten taslak bilgilerini al
+2. `insert_listing_tool` çağır (images, metadata dahil)
+3. Başarılı ise kullanıcıya ilan ID ver
+4. Hata varsa detaylı mesaj döndür
+
+**Örnek Response:**
+```
+✅ İlanınız başarıyla yayınlandı!
+📋 İlan ID: 550e8400-e29b-41d4-a716-446655440000
+📱 Başlık: iPhone 13 128GB
+💰 Fiyat: 25,000 TL
+```
+
+---
+
+### 4. **SearchAgent** (İlan Arama)
+**Görev:** Kullanıcının arama kriterlerine göre ilanları bulur ve sunar.
+
+**Özellikler:**
+- Akıllı arama (query-based)
+- Kategori filtreleme
+- Fiyat aralığı (min/max)
+- Durum filtreleme (yeni/kullanılmış)
+- Lokasyon bazlı arama
+- Metadata tip filtreleme (automotive, electronics, etc.)
+
+**Pagination Stratejisi:**
+- Varsayılan: 5 ilan göster
+- Kullanıcıya "daha fazla" seçeneği sun
+- Her batch'te clear formatting
+
+**Örnek:**
+```
+Kullanıcı: "20-30 bin arası iPhone bul"
+SearchAgent: 
+  → search_listings_tool(query="iPhone", min_price=20000, max_price=30000, limit=5)
+  → "12 ilan bulundu. İlk 5'i göstereyim mi?"
+```
+
+**Display Format:**
+```
+📱 iPhone 13 128GB
+💰 Fiyat: 25,000 TL
+📍 Lokasyon: İstanbul
+👤 İlan sahibi: Ahmet Yılmaz
+📞 Telefon: +90541****705
+🆔 ID: 550e8400-...
+```
+
+---
+
+### 5. **UpdateListingAgent** (İlan Güncelleme)
+**Görev:** Kullanıcının mevcut ilanlarını günceller.
+
+**Güvenlik Kontrolü:** ⚠️
+- Sadece kullanıcının kendi ilanlarını güncelleyebilir
+- `user_id` zorunlu filtre
+- Güncelleme öncesi ilan sahipliği doğrulaması
+
+**Akış:**
+1. `list_user_listings_tool` ile kullanıcının ilanlarını listele
+2. Kullanıcıya hangi ilanı güncellemek istediğini sor
+3. Güncellenecek alanları al (fiyat, başlık, açıklama, etc.)
+4. `update_listing_tool` çağır (user_id kontrolü ile)
+5. Başarı/hata mesajı döndür
+
+**Güvenlik Notu:**
+```python
+# ✅ DOĞRU: user_id kontrolü ile
+update_listing_tool(listing_id="...", user_id=current_user_id, price=30000)
+
+# ❌ YANLIŞ: user_id olmadan (güvenlik açığı!)
+update_listing_tool(listing_id="...", price=30000)
+```
+
+---
+
+### 6. **DeleteListingAgent** (İlan Silme)
+**Görev:** Kullanıcının ilanlarını siler.
+
+**Güvenlik Kontrolü:** ⚠️
+- `user_id` zorunlu filtre
+- Silme öncesi onay alma
+- Sadece kullanıcının kendi ilanları silinebilir
+
+**Akış:**
+1. `list_user_listings_tool` ile ilanları listele
+2. Kullanıcıya hangi ilanı silmek istediğini sor
+3. "Bu ilanı silmek istediğinize emin misiniz?" onayı al
+4. `delete_listing_tool` çağır (user_id kontrolü ile)
+5. Başarı mesajı döndür
+
+---
+
+### 7. **SmallTalkAgent** (Genel Sohbet)
+**Görev:** Selamlaşma, teşekkür, genel sorulara cevap verir.
+
+**Özellikler:**
+- Kullanıcı adı ile kişiselleştirilmiş selamlama
+- PazarGlobal hakkında bilgi
+- Yardım menüsü
+- Friendly & professional tone
+
+**Örnek:**
+```
+Kullanıcı: "Merhaba"
+SmallTalkAgent: "Merhaba Ahmet Bey! 👋 PazarGlobal'e hoş geldiniz. 
+                 Size nasıl yardımcı olabilirim?"
+```
+
+---
+
+### 8. **CancelAgent** (İptal İşlemleri)
+**Görev:** Devam eden işlemleri iptal eder, conversation context'i temizler.
+
+**Kullanım:**
+```
+Kullanıcı: "vazgeçtim", "iptal", "durdur"
+CancelAgent → Context temizleme → "İşlem iptal edildi" mesajı
+```
+
+---
+
+## 🛠️ Tools (Araçlar)
+
+### 1. **clean_price_tool**
+```python
+clean_price_tool(price_text: Optional[str]) -> Dict[str, Optional[int]]
+```
+**Görev:** Fiyat metnini sayısal değere çevirir.
+
+**Örnekler:**
+- "25 bin TL" → 25000
+- "45000" → 45000
+- "2.5M" → 2500000
+- "otuz beş bin" → 35000
+
+---
+
+### 2. **insert_listing_tool**
+```python
+insert_listing_tool(
+    title: str,
+    user_id: str,
+    price: Optional[int] = None,
+    condition: Optional[str] = None,
+    category: Optional[str] = None,
+    description: Optional[str] = None,
+    location: Optional[str] = None,
+    stock: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    images: Optional[list[str]] = None,
+    listing_id: Optional[str] = None
+) -> Dict[str, Any]
+```
+
+**Görev:** Supabase `listings` tablosuna yeni ilan ekler.
+
+**Return:**
+```json
+{
+  "success": true,
+  "listing_id": "550e8400-e29b-41d4-a716-446655440000",
+  "message": "Listing created successfully"
+}
+```
+
+---
+
+### 3. **search_listings_tool**
+```python
+search_listings_tool(
+    query: Optional[str] = None,
+    category: Optional[str] = None,
+    condition: Optional[str] = None,
+    location: Optional[str] = None,
+    min_price: Optional[int] = None,
+    max_price: Optional[int] = None,
+    limit: int = 10,
+    metadata_type: Optional[str] = None
+) -> Dict[str, Any]
+```
+
+**Görev:** Supabase'den ilan arar.
+
+**Return:**
+```json
+{
+  "success": true,
+  "count": 12,
+  "listings": [...]
+}
+```
+
+---
+
+### 4. **update_listing_tool**
+```python
+update_listing_tool(
+    listing_id: str,
+    title: Optional[str] = None,
+    price: Optional[int] = None,
+    condition: Optional[str] = None,
+    category: Optional[str] = None,
+    description: Optional[str] = None,
+    location: Optional[str] = None,
+    stock: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    images: Optional[list[str]] = None
+) -> Dict[str, Any]
+```
+
+**Güvenlik:** `user_id` kontrolü `CURRENT_REQUEST_USER_ID` global variable ile yapılır.
+
+---
+
+### 5. **delete_listing_tool**
+```python
+delete_listing_tool(listing_id: str) -> Dict[str, Any]
+```
+
+**Güvenlik:** `user_id` kontrolü ile sadece kullanıcının kendi ilanları silinir.
+
+---
+
+### 6. **list_user_listings_tool**
+```python
+list_user_listings_tool() -> Dict[str, Any]
+```
+
+**Görev:** Mevcut kullanıcının tüm ilanlarını listeler.
+
+---
+
+### 7. **suggest_category_tool**
+```python
+suggest_category_tool(title: str, description: Optional[str] = None) -> Dict[str, Any]
+```
+
+**Görev:** Başlık ve açıklamadan otomatik kategori önerir.
+
+**Kategoriler:**
+- Elektronik
+- Otomotiv
+- Emlak
+- Moda & Aksesuar
+- Ev & Yaşam
+- Spor & Outdoor
+- Hobi & Eğlence
+- Diğer
+
+---
+
+## 🌐 API Endpoints
+
+### **GET /**
+Health check endpoint.
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "service": "Pazarglobal Agent Backend",
+  "version": "2.0.0",
+  "api_type": "Agents SDK + MCP",
+  "openai_configured": true,
+  "mcp_server": "https://pazarglobal-production.up.railway.app"
+}
+```
+
+---
+
+### **POST /agent/run**
+Ana workflow endpoint. Tüm agent işlemlerini bu endpoint üzerinden yapın.
+
+**Request Body:**
+```json
+{
+  "user_id": "string",
+  "phone": "optional-string",
+  "message": "string",
+  "conversation_history": [],
+  "media_paths": ["optional-list"],
+  "media_type": "optional-string",
+  "draft_listing_id": "optional-uuid",
+  "session_token": "optional-string",
+  "user_context": {
+    "name": "optional-string"
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "response": "Agent'tan gelen cevap metni",
+  "intent": "create_listing",
+  "success": true
+}
+```
+
+**Example:**
 ```bash
-pip install -r requirements.txt
-```
-
-### 2. Configure Environment
-
-Copy `.env.example` to `.env` and fill in:
-
-```env
-OPENAI_API_KEY=sk-proj-...
-MCP_SERVER_URL=https://pazarglobal-production.up.railway.app
-PORT=8000
-```
-
-### 3. Run Locally
-
-```bash
-uvicorn main:app --reload --port 8000
-```
-
-### 4. Test API
-
-```bash
-# Health check
-curl http://localhost:8000
-
-# Run agent
 curl -X POST http://localhost:8000/agent/run \
   -H "Content-Type: application/json" \
   -d '{
@@ -65,184 +420,490 @@ curl -X POST http://localhost:8000/agent/run \
   }'
 ```
 
-## API Endpoints
+---
 
-### `POST /agent/run`
+### **POST /web-chat** (Frontend için)
+Web frontend'den gelen chat istekleri için özel endpoint.
 
-Run agent workflow.
+**Features:**
+- CORS enabled
+- Session management
+- User context hydration
 
-**Request:**
-```json
-{
-  "user_id": "string",
-  "message": "string",
-  "conversation_history": []
-}
+---
+
+## 🚀 Kurulum
+
+### 1. Gereksinimler
+- Python 3.11+
+- pip
+- Supabase account
+- OpenAI API key
+
+### 2. Dependencies Kurulumu
+```bash
+cd pazarglobal-agent-backend
+pip install -r requirements.txt
 ```
 
-**Response:**
-```json
-{
-  "response": "string",
-  "intent": "create_listing",
-  "success": true
-}
+**requirements.txt:**
+```
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.12.3
+python-multipart>=0.0.6
+httpx>=0.26.0
+openai-agents>=0.1.0
+openai>=1.54.0
+openai-guardrails>=0.1.0
+supabase>=2.0.0
+python-dotenv>=1.0.0
 ```
 
-## Deployment to Railway
+### 3. Environment Variables
+`.env` dosyası oluşturun:
 
-### 1. Create GitHub Repo
+```env
+# OpenAI
+OPENAI_API_KEY=sk-proj-...
 
+# Supabase
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=eyJhbGc...
+SUPABASE_ANON_KEY=eyJhbGc...
+SUPABASE_STORAGE_BUCKET=product-images
+
+# Server
+PORT=8000
+
+# Optional: MCP Server (eski sistem, artık kullanılmıyor)
+MCP_SERVER_URL=https://pazarglobal-production.up.railway.app
+```
+
+### 4. Lokal Çalıştırma
+```bash
+uvicorn main:app --reload --port 8000
+```
+
+Server: `http://localhost:8000`
+
+### 5. Test
+```bash
+# Health check
+curl http://localhost:8000
+
+# Test agent
+curl -X POST http://localhost:8000/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "test_user",
+    "message": "merhaba",
+    "conversation_history": []
+  }'
+```
+
+---
+
+## 🚂 Railway Deployment
+
+### 1. GitHub Repository
 ```bash
 git init
 git add .
 git commit -m "Initial commit: Agent backend"
 git branch -M main
-git remote add origin https://github.com/emrahbadas00-lgtm/pazarglobal-agent-backend.git
+git remote add origin https://github.com/YOUR_USERNAME/pazarglobal-agent-backend.git
 git push -u origin main
 ```
 
-### 2. Deploy to Railway
+### 2. Railway Setup
+1. **Railway'e git:** https://railway.app/new
+2. **"Deploy from GitHub repo"** seç
+3. **Repository:** `pazarglobal-agent-backend`
+4. Railway otomatik Python detect edecek
 
-1. Go to Railway dashboard
-2. New Project → Deploy from GitHub
-3. Select `pazarglobal-agent-backend` repo
-4. Add environment variables:
-   - `OPENAI_API_KEY`
-   - `MCP_SERVER_URL`
-5. Deploy!
-
-### 3. Get Railway URL
-
-Railway will give you: `https://pazarglobal-agent-backend-production.up.railway.app`
-
-### 4. Update WhatsApp Bridge
-
-Update WhatsApp bridge to call agent backend instead of OpenAI directly.
-
-## How It Works
-
-### Agent Flow
-
-1. **User sends message** → WhatsApp Bridge receives
-2. **Bridge calls Agent Backend** → `/agent/run` endpoint
-3. **RouterAgent classifies intent** → Returns intent type
-4. **Route to specialized agent** → Based on intent
-5. **Agent calls MCP tools** → If needed (DB operations)
-6. **Return response** → Back to WhatsApp Bridge → Twilio → User
-
-### Example Flow: Create Listing
-
-```
-User: "iPhone 13 satıyorum 25 bin TL"
-   ↓
-RouterAgent: intent = "create_listing"
-   ↓
-CreateListingAgent:
-   - Extracts: title="iPhone 13", price_text="25 bin TL"
-   - Calls clean_price_tool(price_text="25 bin TL") → 25000
-   - Shows preview
-   ↓
-Response: "📝 İlan önizlemesi:
-📱 iPhone 13
-💰 25,000 TL
-✅ Onaylamak için 'onayla' yazın"
+### 3. Environment Variables (Railway Dashboard)
+```env
+OPENAI_API_KEY=sk-proj-...
+SUPABASE_URL=https://...
+SUPABASE_SERVICE_KEY=eyJhbGc...
+SUPABASE_ANON_KEY=eyJhbGc...
+SUPABASE_STORAGE_BUCKET=product-images
+PORT=8000
 ```
 
-### Example Flow: Publish Listing
+### 4. Deploy
+- Railway otomatik deploy başlatır
+- Build time: ~3-5 dakika
+- Railway size public URL verir: `https://pazarglobal-agent-backend-production.up.railway.app`
 
-```
-User: "onayla"
-   ↓
-RouterAgent: intent = "publish_listing"
-   ↓
-PublishAgent:
-   - Checks conversation history for prepared listing
-   - Calls insert_listing_tool(user_id, title, price, ...)
-   ↓
-MCP Server → Supabase INSERT
-   ↓
-Response: "✅ İlanınız başarıyla yayınlandı!"
+### 5. Doğrulama
+```bash
+curl https://your-railway-url.up.railway.app
 ```
 
-## Tools
-
-All tools are called via MCP Server HTTP endpoint:
-
-```python
-POST {MCP_SERVER_URL}/mcp/call-tool
+Expected:
+```json
 {
-  "tool_name": "insert_listing_tool",
-  "arguments": {
-    "user_id": "...",
-    "title": "...",
-    "price": 25000
-  }
+  "status": "healthy",
+  "service": "Pazarglobal Agent Backend"
 }
 ```
 
-Available tools:
-- `clean_price_tool`
-- `insert_listing_tool`
-- `update_listing_tool`
-- `delete_listing_tool`
-- `list_user_listings_tool`
-- `search_listings_tool`
+---
 
-## Conversation State
+## 🔧 Environment Variables
 
-Agent maintains conversation history to track:
-- Prepared listings (before publish)
-- Which listing to update/delete
-- User context
+| Variable | Gerekli | Açıklama | Örnek |
+|----------|---------|----------|-------|
+| `OPENAI_API_KEY` | ✅ | OpenAI API anahtarı | `sk-proj-...` |
+| `SUPABASE_URL` | ✅ | Supabase project URL | `https://xyz.supabase.co` |
+| `SUPABASE_SERVICE_KEY` | ✅ | Supabase service role key (RLS bypass) | `eyJhbGc...` |
+| `SUPABASE_ANON_KEY` | ❌ | Supabase anon key (public operations) | `eyJhbGc...` |
+| `SUPABASE_STORAGE_BUCKET` | ✅ | Storage bucket name | `product-images` |
+| `PORT` | ❌ | Server port (Railway otomatik set eder) | `8000` |
 
-History is passed in `conversation_history` array.
+---
 
-## Error Handling
+## 📊 Workflow Detayları
 
-- Tool call failures → Return friendly error message
-- Missing fields → Ask user for missing info
-- No listings found → Guide user to create one
-- Timeout → Retry logic in MCP calls
-
-## Testing
-
-### Test RouterAgent
-
-```bash
-curl -X POST http://localhost:8000/agent/run \
-  -d '{"user_id":"test","message":"merhaba","conversation_history":[]}'
-# Should return: small_talk intent
+### Conversation Flow
+```
+1. User Message → main.py (/agent/run endpoint)
+                    ↓
+2. WorkflowInput oluştur (message, history, media, user_id)
+                    ↓
+3. run_workflow(workflow_input) → workflow.py
+                    ↓
+4. RouterAgent → Intent classification
+                    ↓
+5. Specialized Agent (Create/Search/Update/Delete/SmallTalk)
+                    ↓
+6. Tool calls (insert_listing, search_listings, etc.)
+                    ↓
+7. Supabase operations
+                    ↓
+8. Response → User
 ```
 
-### Test CreateListingAgent
-
-```bash
-curl -X POST http://localhost:8000/agent/run \
-  -d '{"user_id":"test","message":"iPhone 13 satıyorum 25 bin TL","conversation_history":[]}'
-# Should return: listing preview
+### Media Handling Flow
+```
+WhatsApp Bridge → Media download & compress
+                    ↓
+                Supabase Storage upload
+                    ↓
+                Storage path → Agent Backend
+                    ↓
+                CreateListingAgent → images field
+                    ↓
+                insert_listing_tool → Database
 ```
 
-### Test SearchAgent
+### Global State Management
+**⚠️ İyileştirme Gerekiyor:**
+```python
+# workflow.py
+CURRENT_REQUEST_USER_ID = None  # Concurrent requests'te risk!
 
-```bash
-curl -X POST http://localhost:8000/agent/run \
-  -d '{"user_id":"test","message":"MacBook arıyorum","conversation_history":[]}'
-# Should return: search results
+# TODO: WorkflowContext class ile değiştirilmeli
 ```
 
-## Environment Variables
+---
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `OPENAI_API_KEY` | OpenAI API key | `sk-proj-...` |
-| `MCP_SERVER_URL` | MCP server base URL | `https://pazarglobal-production.up.railway.app` |
-| `PORT` | Server port | `8000` |
+## 🔒 Güvenlik
 
-## License
+### Mevcut Güvenlik Önlemleri
+✅ **Supabase Service Key kullanımı** (RLS bypass)  
+✅ **User ID validation** (update/delete işlemlerinde)  
+✅ **Phone number → user profile mapping**  
+✅ **Media type validation** (WhatsApp Bridge'de)
 
-MIT
+### Güvenlik İyileştirmeleri (TODO)
+⚠️ **Global State Riski:**
+```python
+# ❌ Şu anki: Concurrent request'lerde sorun çıkarabilir
+CURRENT_REQUEST_USER_ID = None
 
-## Author
+# ✅ Olması gereken
+class WorkflowContext:
+    def __init__(self, user_id: str):
+        self.user_id = user_id
+```
 
-Emrah Badas
+⚠️ **Yayınlanmış İlan Güncelleme Güvenlik Açığı:**
+- UpdateListingAgent yayınlanmış ilanları sadece conversation context'e bakarak güncelliyor
+- PIN/OTP doğrulama yok
+- **Çözüm:** Phase 4 (Güvenlik Sertleştirmesi) ile implement edilecek
+
+⚠️ **Rate Limiting Eksik:**
+```python
+# TODO: Eklenecek
+from slowapi import Limiter
+@limiter.limit("10/minute")
+```
+
+⚠️ **Session Persistence:**
+- In-memory conversation store → Redis'e taşınmalı
+- Session timeout & device fingerprinting
+
+---
+
+## 🎯 Gelecek Özellikler
+
+### Phase 3.5: Premium Listing (MONETIZATION) 💰
+**Timeline:** 2-3 hafta
+
+**Database Changes:**
+```sql
+ALTER TABLE listings ADD COLUMN is_premium BOOLEAN DEFAULT FALSE;
+ALTER TABLE listings ADD COLUMN premium_expires_at TIMESTAMP;
+CREATE INDEX idx_listings_premium ON listings(is_premium, created_at);
+```
+
+**SearchAgent Enhancement:**
+- Premium ilanlar her zaman ilk sırada
+- "⭐ PREMIUM" badge
+- Monetization trigger messages
+
+**UX Example:**
+```
+SearchAgent: "50 ilan bulundu (2 premium). İlk 5'i göstereyim mi?"
+[2 premium + 3 normal göster]
+"💡 ⭐ Premium ilanlar listenin başında görünür! 
+    İlanınızı öne çıkarmak için Premium üyelik edinin."
+```
+
+---
+
+### Phase 4: ImageAgent (Vision AI) 🖼️
+**Timeline:** 2 hafta
+
+**Features:**
+- OpenAI Vision API ile ürün tanıma
+- Marka/model çıkarımı
+- Otomatik kategori tespiti
+- Fiyat tahmin algoritması
+- Ürün durumu analizi (yeni/kullanılmış)
+
+**Tools:**
+```python
+@function_tool
+async def analyze_product_image_tool(image_path: str) -> Dict:
+    """Vision API ile ürün analizi"""
+    # OpenAI Vision call
+    # Return: category, brand, model, condition, estimated_price
+```
+
+---
+
+### Phase 5: VoiceAgent (Speech) 🎤
+**Timeline:** 2 hafta
+
+**Features:**
+- OpenAI Whisper (STT)
+- OpenAI TTS (Text-to-Speech)
+- Sesli komutlar: "iPhone sat", "telefon ara"
+- Türkçe optimizasyon
+
+---
+
+### Phase 6: MarketingAgent (Market Intelligence) 📊
+**Timeline:** 3 hafta
+
+**Features:**
+- Sahibinden/Letgo web scraping
+- Piyasa fiyat karşılaştırma
+- Trend analizi
+- Optimal fiyat önerisi
+
+**Tools:**
+```python
+@function_tool
+async def search_market_prices_tool(product: str) -> Dict:
+    """Piyasa fiyat araştırması"""
+    # Playwright/BeautifulSoup scraping
+    # Return: min, max, avg, median prices
+```
+
+---
+
+### Phase 7: SecurityAgent (Advanced Security) 🔐
+**Timeline:** 1 hafta
+
+**Features:**
+- PIN/OTP doğrulama
+- Device fingerprinting
+- Session management
+- Audit logging
+- Fraud detection
+
+---
+
+### Phase 8: Payment Integration 💳
+**Timeline:** 3-4 hafta
+
+**Gateways:**
+- Stripe (global)
+- İyzico (Turkey)
+
+**Features:**
+- Escrow system
+- Premium membership payments
+- Transaction history
+
+---
+
+## 🐛 Sorun Giderme
+
+### 1. Agent Çalışmıyor
+**Semptom:** "error" in response
+
+**Kontroller:**
+```bash
+# OpenAI API key doğru mu?
+echo $OPENAI_API_KEY
+
+# Supabase erişimi var mı?
+curl -H "apikey: $SUPABASE_ANON_KEY" $SUPABASE_URL/rest/v1/listings?limit=1
+
+# Logs kontrol
+# Railway: Dashboard → Logs
+```
+
+---
+
+### 2. User ID Mapping Hatası
+**Semptom:** "Kullanıcı bulunamadı"
+
+**Çözüm:**
+```python
+# main.py'de user profile fetch kontrolü
+# Phone number formatting: +905551234567 (country code ile)
+```
+
+---
+
+### 3. Conversation History Kayboluyor
+**Semptom:** Agent önceki mesajları hatırlamıyor
+
+**Çözüm:**
+- WhatsApp Bridge'den `conversation_history` gönderildiğinden emin olun
+- Bridge'deki `conversation_store` timeout'u artırın (default: 30 dakika)
+
+---
+
+### 4. Media Upload Başarısız
+**Semptom:** Fotoğraf yüklenmiyor
+
+**Kontroller:**
+```bash
+# Supabase Storage bucket var mı?
+# product-images bucket public mi? (private olmalı)
+# SUPABASE_SERVICE_KEY doğru mu?
+```
+
+---
+
+### 5. Slow Response Time
+**Optimizasyon:**
+- Model değiştir: GPT-4 → GPT-3.5-turbo (hızlı işlemler için)
+- `max_tokens` limitini azalt
+- Conversation history'yi kısalt (son 10 mesaj)
+
+```python
+# workflow.py
+model_settings=ModelSettings(
+    model="gpt-3.5-turbo",  # Hızlı işlemler için
+    max_tokens=500
+)
+```
+
+---
+
+## 📚 Kaynaklar
+
+- **OpenAI Agents SDK Docs:** https://platform.openai.com/docs/agents
+- **Supabase Docs:** https://supabase.com/docs
+- **FastAPI Docs:** https://fastapi.tiangolo.com
+- **Railway Docs:** https://docs.railway.app
+
+---
+
+## 📝 Changelog
+
+### v2.0.0 (Aralık 2025)
+- ✅ OpenAI Agents SDK migration (MCP'den native functions'a)
+- ✅ Multi-agent architecture (8 specialized agents)
+- ✅ Media handling (images support)
+- ✅ User profile mapping (phone → Supabase users)
+- ✅ Conversation history management
+- ✅ Category suggestion tool
+- ✅ Metadata support (electronics, automotive, real estate)
+
+### v1.0.0 (Kasım 2025)
+- Initial release
+- MCP server integration
+- Basic listing operations
+
+---
+
+## 👨‍💻 Geliştirici Notları
+
+### Code Structure
+```
+pazarglobal-agent-backend/
+├── main.py                 # FastAPI app + endpoints
+├── workflow.py             # Agents + tools + workflow logic
+├── requirements.txt        # Python dependencies
+├── runtime.txt            # Python version (Railway için)
+├── tools/                 # Native function tools
+│   ├── clean_price.py
+│   ├── insert_listing.py
+│   ├── search_listings.py
+│   ├── update_listing.py
+│   ├── delete_listing.py
+│   ├── list_user_listings.py
+│   ├── suggest_category.py
+│   └── security_tools.py
+├── supabase/
+│   └── config.toml        # Supabase local config
+└── scripts/
+    ├── test_insert_simple.py
+    └── test_3_photos.py
+```
+
+### Development Tips
+```bash
+# Hot reload development
+uvicorn main:app --reload --port 8000
+
+# Test specific agent
+# workflow.py'de agent'ı manuel çağır
+
+# Database schema değişikliği
+# Supabase Dashboard → SQL Editor
+
+# Logs
+# Railway: Dashboard → Deployments → View Logs
+# Local: Terminal output
+```
+
+---
+
+## 🤝 Katkıda Bulunma
+
+Bu proje aktif geliştirme aşamasında. Öneri ve katkılarınız için:
+- GitHub Issues
+- Pull Requests
+
+---
+
+## 📄 Lisans
+
+Private project - PazarGlobal
+
+---
+
+**Son Güncelleme:** 10 Aralık 2025  
+**Versiyon:** 2.0.0  
+**Durum:** Production Ready (with improvements needed)
