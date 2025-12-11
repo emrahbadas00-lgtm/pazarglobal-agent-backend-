@@ -385,6 +385,13 @@ Respond ONLY with valid JSON following the schema.
 6. Default → small_talk
 
 Respond with JSON only: {"intent": "create_listing"}
+
+🎙️ TURKISH TTS OPTIMIZATION (for all text responses):
+- Use commas for natural pauses: "Merhaba! Nasıl yardımcı olabilirim?"
+- Always end questions with '?': "Ne arıyorsunuz?"
+- End statements with '.': "İlan başarıyla oluşturuldu."
+- Separate list items with commas: "İlan ver, ürün ara, yardım al"
+- Keep sentences short (max 15 words) for better voice clarity
 """,
     model="gpt-5.1",
     output_type=RouterAgentIntentClassifierSchema,
@@ -553,12 +560,19 @@ insert_listing_tool(
     images=[]
 )
 
-✅ Success (SHORT):
+✅ Success (SHORT with proper punctuation):
 "✅ İlan yayınlandı!
 📱 [title]
 💰 [price] TL
 
 İlan ID: [result[0]['id']]"
+
+🎙️ CRITICAL - TTS VOICE OPTIMIZATION:
+- Always use proper Turkish punctuation for natural prosody
+- Commas for pauses: "Merhaba, size nasıl yardımcı olabilirim?"
+- Question marks for interrogatives: "Fiyat ne olsun?"
+- Periods for statements: "İlanınız kaydedildi."
+- Separate clauses: "Fotoğraf eklendi, devam edebilirsiniz."
 
 ❌ If description missing in preview:
 → Create brief description from title before insert
@@ -587,6 +601,13 @@ searchagent = Agent(
 
 ⚠️ CRITICAL: NEVER respond with JSON or structured data like {"intent":"search_product"}.
 ALWAYS respond in natural Turkish language as a helpful assistant.
+
+🎙️ TURKISH TTS VOICE OPTIMIZATION:
+- Use commas for natural breathing pauses: "Toplam 15 ilan bulundu, size 5 tanesini göstereyim mi?"
+- Always use '?' for questions: "Detaylı görmek ister misiniz?"
+- Use '.' for statements: "İşte ilanlar."
+- Keep sentences short (max 15-20 words) for better voice clarity
+- Separate options with commas: "İlan ver, ürün ara, yardım al"
 
 🎯 Your tasks:
 1. Search products using search_listings_tool (LIST VIEW - compact summaries)
@@ -1100,8 +1121,14 @@ smalltalkagent = Agent(
 ## TWO MODES:
 
 ### MODE 1: GREETING (User says: merhaba, selam, hi)
-✅ SHORT response (1-2 sentences):
-"Merhaba! Ne yapmak istersiniz? (İlan vermek / Ürün aramak)"
+✅ SHORT response (1-2 sentences with proper punctuation):
+"Merhaba! Ne yapmak istersiniz? İlan vermek mi, ürün aramak mı?"
+
+🎙️ TURKISH TTS VOICE OPTIMIZATION:
+- Commas for natural pauses: "Merhaba, nasıl yardımcı olabilirim?"
+- Question marks always: "Ne yapmak istersiniz?"
+- Periods for statements: "Size yardımcı olabilirim."
+- Keep greetings warm and natural with proper intonation cues
 
 ### MODE 2: CLARIFICATION (User is unclear/indecisive)
 When user says:
@@ -1111,16 +1138,16 @@ When user says:
 - "kararsızım"
 - "ne tür ilanlar var"
 
-✅ Help them decide with OPTIONS:
+✅ Help them decide with OPTIONS (with proper punctuation for TTS):
 "PazarGlobal'de şunları yapabilirsiniz:
 
-🛒 İlan Vermek: Ürün satmak veya kiralamak için
+🛒 İlan Vermek: Ürün satmak veya kiralamak için.
 → Örnek: 'iPhone satmak istiyorum'
 
-🔍 Ürün Aramak: Almak veya kiralamak için
+🔍 Ürün Aramak: Almak veya kiralamak için.
 → Örnek: 'Araba arıyorum'
 
-📋 İlanlarım: Mevcut ilanlarınızı görmek için
+📋 İlanlarım: Mevcut ilanlarınızı görmek için.
 → 'ilanlarımı göster' yazın
 
 Ne yapmak istersiniz?"
@@ -1153,12 +1180,17 @@ cancelagent = Agent(
 
 🎯 Task: Cancel operations and reset context.
 
-✅ Response:
+✅ Response (with proper punctuation for TTS):
 "🔄 İşlem iptal edildi.
 
 Yeni bir işlem için:
-• Ürün satmak: Ürün bilgilerini yazın
-• Ürün aramak: Ne aradığınızı söyleyin"
+• Ürün satmak: Ürün bilgilerini yazın.
+• Ürün aramak: Ne aradığınızı söyleyin."
+
+🎙️ TTS OPTIMIZATION:
+- Use periods at end of each instruction
+- Commas for list separation
+- Keep tone friendly and clear
 
 🚫 No tools needed.""",
     model="gpt-5.1",
