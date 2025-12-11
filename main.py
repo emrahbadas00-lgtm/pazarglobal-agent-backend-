@@ -333,7 +333,7 @@ async def correct_speech(request: SpeechCorrectionRequest):
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
         
-        correction_prompt = f"""Sen otomatik konuşma tanıma (STT) sisteminden gelen Türkçe metinleri düzelten bir asistansın.
+        correction_prompt = f"""Sen otomatik konuşma tanıma (STT) sisteminden gelen Türkçe metinleri düzelten bir UZMAN asistansın.
 
 GÖREVIN:
 - Yazım hatalarını düzelt
@@ -341,23 +341,23 @@ GÖREVIN:
 - Bağlama göre yanlış algılanan kelimeleri düzelt
 - Dolgu kelimelerini kaldır (eee, şey, ııı, hmm, işte)
 - Doğal Türkçe cümle yapısına çevir
+- MARKA İSİMLERİNİ mutlaka orijinal yazılışına çevir
 - Anlam değiştirme, sadece düzelt
 
-KURALLAR:
+ÖNEMLİ KURALLAR:
 - Sayıları rakamlarla yaz (otuz bin → 30000, beşyüz → 500)
 - Fiyatları doğru formatla (otuz bin lira → 30000 TL)
 - Kısa ve öz tut
 - Sadece düzeltilmiş metni döndür, açıklama yapma
+- Bilinmeyen markalar için en yakın gerçek marka ismini kullan
 
 MARKA İSİMLERİ (Türkçe telaffuz → Orijinal yazılış):
+
+OTOMOTIV:
 - sitroen, citron, sitroyen → Citroen
-- ayfon, ayfın, ayfone → iPhone
-- ayped, aypad → iPad
-- samsıng, samsung → Samsung
-- huavey, huawei → Huawei
 - reno, renault → Renault
 - porşe, porş → Porsche
-- mersedes, mercedes → Mercedes
+- mersedes, mercedes, mercedes benz → Mercedes-Benz
 - bımvı, bm, bemve → BMW
 - foksvagen, volkswagen, wolkswagen → Volkswagen
 - fiat, fıat → Fiat
@@ -370,14 +370,82 @@ MARKA İSİMLERİ (Türkçe telaffuz → Orijinal yazılış):
 - mazda, masda → Mazda
 - suzuki, suzüki → Suzuki
 - opel, öpel → Opel
-- renaut, renau → Renault
 - pejo, pöjö, peugot → Peugeot
 - cıtrıon → Citroen
+- skoda, iskoda → Skoda
+- dacia, daçya → Dacia
+- seat, seat → SEAT
+- mitsubishi, mitsubiş → Mitsubishi
+- subaru, sübaru → Subaru
+- volvo, wolvo → Volvo
+- lexus, leksus → Lexus
+- land rover, land rover → Land Rover
+- jaguar, caguar → Jaguar
+- ferrari, ferari → Ferrari
+- lamborghini, lamborgini → Lamborghini
+- maserati, mazerati → Maserati
+- aston martin, aston martin → Aston Martin
+- bugatti, bügatti → Bugatti
+- bentley, bentli → Bentley
+- rolls royce, rolsroys → Rolls-Royce
+
+ELEKTRONİK:
+- ayfon, ayfın, ayfone → iPhone
+- ayped, aypad → iPad
+- samsıng, samsung → Samsung
+- huavey, huawei → Huawei
 - lenova, lenavo → Lenovo
 - ecer, eyser, acer → Acer
 - esus, asus → ASUS
 - dekl, dell → Dell
 - eçpi, hp → HP
+- şiyomi, xiaomi, şaomi → Xiaomi
+- oppo, öppo → Oppo
+- vivo, wivo → Vivo
+- realme, rialmi → Realme
+- oneplus, wanplas → OnePlus
+- google pixel, gugıl piksıl → Google Pixel
+- sony, soni → Sony
+- lg, elci → LG
+- microsoft, maykırosaft → Microsoft
+- apple, epıl → Apple
+- canon, kenon → Canon
+- nikon, naykın → Nikon
+
+PARFÜM & KOZMETİK:
+- kelvin klein, calvin klein, calvin → Calvin Klein
+- selin dion, celine dion → Celine Dion
+- poison, poyzın → Poison (Dior)
+- dior, diyor, dıor → Dior
+- chanel, şanel, channel → Chanel
+- lancome, lanköm → Lancôme
+- gucci, guci, gucı → Gucci
+- prada, pirada → Prada
+- versace, versaçe, versaç → Versace
+- armani, armani → Armani
+- hugo boss, hugobus → Hugo Boss
+- dolce gabbana, dolçe gabbana → Dolce & Gabbana
+- yves saint laurent, iv sen loran → Yves Saint Laurent
+- givenchy, jivenşi → Givenchy
+- burberry, burberi → Burberry
+- bulgari, bulgari → Bvlgari
+- hermes, ermes → Hermès
+- carolina herrera, karolina herera → Carolina Herrera
+- jean paul gaultier, jan pol goltiye → Jean Paul Gaultier
+- thierry mugler, tiyeri mügler → Thierry Mugler
+- kenzo, kenzo → Kenzo
+- issey miyake, isi miyake → Issey Miyake
+- valentino, valentino → Valentino
+- tom ford, tom fort → Tom Ford
+- jo malone, co malone → Jo Malone
+- creed, krid → Creed
+- montblanc, monblan → Montblanc
+- davidoff, devidof → Davidoff
+- lacoste, lakost → Lacoste
+- paco rabanne, pako raban → Paco Rabanne
+- elie saab, eli sab → Elie Saab
+- escada, eskada → Escada
+- nina ricci, nina riç → Nina Ricci
 
 HAM METİN:
 {request.text}
