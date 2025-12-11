@@ -333,124 +333,39 @@ async def correct_speech(request: SpeechCorrectionRequest):
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
         
-        correction_prompt = f"""Sen otomatik konuşma tanıma (STT) sisteminden gelen Türkçe metinleri düzelten bir UZMAN asistansın.
+        # Compact brand mapping for speed
+        brand_corrections = {
+            # Otomotiv
+            "sitroen": "Citroen", "citron": "Citroen", "reno": "Renault", "porşe": "Porsche",
+            "mersedes": "Mercedes-Benz", "bımvı": "BMW", "foksvagen": "Volkswagen", "hundai": "Hyundai",
+            "toyta": "Toyota", "pejo": "Peugeot", "skoda": "Skoda", "mazda": "Mazda",
+            # Elektronik
+            "ayfon": "iPhone", "aypad": "iPad", "samsıng": "Samsung", "huavey": "Huawei",
+            "lenova": "Lenovo", "şiyomi": "Xiaomi", "esus": "ASUS",
+            # Parfüm
+            "kelvin klein": "Calvin Klein", "calvin klein": "Calvin Klein", "selin dion": "Celine Dion",
+            "poison": "Poison", "diyor": "Dior", "şanel": "Chanel", "lanköm": "Lancôme",
+            "gucci": "Gucci", "versaçe": "Versace", "hugo boss": "Hugo Boss", "lakost": "Lacoste",
+            "lakos": "Lacoste", "lagos": "Lacoste", "elie saab": "Elie Saab"
+        }
+        
+        # Quick brand replacement in text
+        text_lower = request.text.lower()
+        corrected_brands = request.text
+        for wrong, correct in brand_corrections.items():
+            if wrong in text_lower:
+                import re
+                corrected_brands = re.sub(rf'\b{wrong}\b', correct, corrected_brands, flags=re.IGNORECASE)
+        
+        correction_prompt = f"""Türkçe STT metnini düzelt:
+- Yazım hatası düzelt
+- Noktalama ekle
+- Dolgu kelimeleri sil (eee, şey)
+- Sayıları rakamla (otuz bin → 30000)
+- Sadece düzeltilmiş metni döndür
 
-GÖREVIN:
-- Yazım hatalarını düzelt
-- Noktalama işaretleri ekle
-- Bağlama göre yanlış algılanan kelimeleri düzelt
-- Dolgu kelimelerini kaldır (eee, şey, ııı, hmm, işte)
-- Doğal Türkçe cümle yapısına çevir
-- MARKA İSİMLERİNİ mutlaka orijinal yazılışına çevir
-- Anlam değiştirme, sadece düzelt
-
-ÖNEMLİ KURALLAR:
-- Sayıları rakamlarla yaz (otuz bin → 30000, beşyüz → 500)
-- Fiyatları doğru formatla (otuz bin lira → 30000 TL)
-- Kısa ve öz tut
-- Sadece düzeltilmiş metni döndür, açıklama yapma
-- Bilinmeyen markalar için en yakın gerçek marka ismini kullan
-
-MARKA İSİMLERİ (Türkçe telaffuz → Orijinal yazılış):
-
-OTOMOTIV:
-- sitroen, citron, sitroyen → Citroen
-- reno, renault → Renault
-- porşe, porş → Porsche
-- mersedes, mercedes, mercedes benz → Mercedes-Benz
-- bımvı, bm, bemve → BMW
-- foksvagen, volkswagen, wolkswagen → Volkswagen
-- fiat, fıat → Fiat
-- ford, fort → Ford
-- hundai, hyndai → Hyundai
-- kia, kıa → Kia
-- toyta, toyota → Toyota
-- nissan, nisan → Nissan
-- honda, handa → Honda
-- mazda, masda → Mazda
-- suzuki, suzüki → Suzuki
-- opel, öpel → Opel
-- pejo, pöjö, peugot → Peugeot
-- cıtrıon → Citroen
-- skoda, iskoda → Skoda
-- dacia, daçya → Dacia
-- seat, seat → SEAT
-- mitsubishi, mitsubiş → Mitsubishi
-- subaru, sübaru → Subaru
-- volvo, wolvo → Volvo
-- lexus, leksus → Lexus
-- land rover, land rover → Land Rover
-- jaguar, caguar → Jaguar
-- ferrari, ferari → Ferrari
-- lamborghini, lamborgini → Lamborghini
-- maserati, mazerati → Maserati
-- aston martin, aston martin → Aston Martin
-- bugatti, bügatti → Bugatti
-- bentley, bentli → Bentley
-- rolls royce, rolsroys → Rolls-Royce
-
-ELEKTRONİK:
-- ayfon, ayfın, ayfone → iPhone
-- ayped, aypad → iPad
-- samsıng, samsung → Samsung
-- huavey, huawei → Huawei
-- lenova, lenavo → Lenovo
-- ecer, eyser, acer → Acer
-- esus, asus → ASUS
-- dekl, dell → Dell
-- eçpi, hp → HP
-- şiyomi, xiaomi, şaomi → Xiaomi
-- oppo, öppo → Oppo
-- vivo, wivo → Vivo
-- realme, rialmi → Realme
-- oneplus, wanplas → OnePlus
-- google pixel, gugıl piksıl → Google Pixel
-- sony, soni → Sony
-- lg, elci → LG
-- microsoft, maykırosaft → Microsoft
-- apple, epıl → Apple
-- canon, kenon → Canon
-- nikon, naykın → Nikon
-
-PARFÜM & KOZMETİK:
-- kelvin klein, calvin klein, calvin → Calvin Klein
-- selin dion, celine dion → Celine Dion
-- poison, poyzın → Poison (Dior)
-- dior, diyor, dıor → Dior
-- chanel, şanel, channel → Chanel
-- lancome, lanköm → Lancôme
-- gucci, guci, gucı → Gucci
-- prada, pirada → Prada
-- versace, versaçe, versaç → Versace
-- armani, armani → Armani
-- hugo boss, hugobus → Hugo Boss
-- dolce gabbana, dolçe gabbana → Dolce & Gabbana
-- yves saint laurent, iv sen loran → Yves Saint Laurent
-- givenchy, jivenşi → Givenchy
-- burberry, burberi → Burberry
-- bulgari, bulgari → Bvlgari
-- hermes, ermes → Hermès
-- carolina herrera, karolina herera → Carolina Herrera
-- jean paul gaultier, jan pol goltiye → Jean Paul Gaultier
-- thierry mugler, tiyeri mügler → Thierry Mugler
-- kenzo, kenzo → Kenzo
-- issey miyake, isi miyake → Issey Miyake
-- valentino, valentino → Valentino
-- tom ford, tom fort → Tom Ford
-- jo malone, co malone → Jo Malone
-- creed, krid → Creed
-- montblanc, monblan → Montblanc
-- davidoff, devidof → Davidoff
-- lacoste, lakost → Lacoste
-- paco rabanne, pako raban → Paco Rabanne
-- elie saab, eli sab → Elie Saab
-- escada, eskada → Escada
-- nina ricci, nina riç → Nina Ricci
-
-HAM METİN:
-{request.text}
-
-DÜZELTİLMİŞ METİN:"""
+HAM: {corrected_brands}
+DÜZELTİLMİŞ:"""
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
