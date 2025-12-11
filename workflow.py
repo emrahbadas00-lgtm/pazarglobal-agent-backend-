@@ -120,9 +120,12 @@ async def insert_listing_tool(
         images: Supabase storage path list
         listing_id: Opsiyonel, önceden belirlenmiş UUID (mediayla senkron)
     """
+    # Use the authenticated user's ID from workflow context
+    resolved_user_id = CURRENT_REQUEST_USER_ID or user_id
+    
     return await insert_listing(
         title=title,
-        user_id=user_id,
+        user_id=resolved_user_id,
         price=price,
         condition=condition,
         category=category,
