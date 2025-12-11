@@ -349,6 +349,36 @@ KURALLAR:
 - Kısa ve öz tut
 - Sadece düzeltilmiş metni döndür, açıklama yapma
 
+MARKA İSİMLERİ (Türkçe telaffuz → Orijinal yazılış):
+- sitroen, citron, sitroyen → Citroen
+- ayfon, ayfın, ayfone → iPhone
+- ayped, aypad → iPad
+- samsıng, samsung → Samsung
+- huavey, huawei → Huawei
+- reno, renault → Renault
+- porşe, porş → Porsche
+- mersedes, mercedes → Mercedes
+- bımvı, bm, bemve → BMW
+- foksvagen, volkswagen, wolkswagen → Volkswagen
+- fiat, fıat → Fiat
+- ford, fort → Ford
+- hundai, hyndai → Hyundai
+- kia, kıa → Kia
+- toyta, toyota → Toyota
+- nissan, nisan → Nissan
+- honda, handa → Honda
+- mazda, masda → Mazda
+- suzuki, suzüki → Suzuki
+- opel, öpel → Opel
+- renaut, renau → Renault
+- pejo, pöjö, peugot → Peugeot
+- cıtrıon → Citroen
+- lenova, lenavo → Lenovo
+- ecer, eyser, acer → Acer
+- esus, asus → ASUS
+- dekl, dell → Dell
+- eçpi, hp → HP
+
 HAM METİN:
 {request.text}
 
