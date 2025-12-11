@@ -329,6 +329,11 @@ async def correct_speech(request: SpeechCorrectionRequest):
     logger.info(f"🎤 Speech correction request from user: {request.user_id or 'anonymous'}")
     logger.info(f"📝 Original text: {request.text}")
     
+    # Fallback: return original text if anything fails
+    if not request.text or len(request.text.strip()) == 0:
+        logger.warning("⚠️ Empty text received, returning empty")
+        return SpeechCorrectionResponse(corrected=request.text, original=request.text, changes_made=False)
+    
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
@@ -400,6 +405,12 @@ DÜZELTİLMİŞ:"""
         )
 
 
+@app.options("/correct-speech")
+async def correct_speech_options():
+    """Handle CORS preflight for /correct-speech"""
+    return {"status": "ok"}
+
+
 @app.get("/health")
 async def health_check():
     """Detailed health check"""
@@ -407,7 +418,8 @@ async def health_check():
         "status": "healthy",
         "checks": {
             "openai_key": "configured" if OPENAI_API_KEY else "missing",
-            "mcp_server": MCP_SERVER_URL
+            "mcp_server": MCP_SERVER_URL,
+            "endpoints": ["/agent/run", "/web-chat", "/correct-speech", "/health"]
         }
     }
 
