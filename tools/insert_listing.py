@@ -33,6 +33,8 @@ async def insert_listing(
     metadata: Optional[Dict[str, Any]] = None,
     images: Optional[List[str]] = None,
     listing_id: Optional[str] = None,
+    user_name: Optional[str] = None,  # User's full name
+    user_phone: Optional[str] = None,  # User's phone number
 ) -> Dict[str, Any]:
     """
     Supabase REST API üzerinden 'listings' tablosuna kayıt ekler.
@@ -62,11 +64,9 @@ async def insert_listing(
             "error": "SUPABASE_URL veya SUPABASE_SERVICE_KEY tanımlı değil",
         }
     
-    # TEMPORARY FIX: Always use default UUID until user authentication is implemented
-    # This bypasses RLS checks for testing
-    print(f"🔧 Original user_id: {user_id}")
-    user_id = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
-    print(f"🔧 Using default test UUID: {user_id}")
+    # Use provided user_id (already resolved from phone number in main.py)
+    print(f"✅ Using authenticated user_id: {user_id}")
+    print(f"👤 User: {user_name} ({user_phone})")
 
     # 🤖 AI-POWERED CATEGORY VALIDATION
     # If category is missing or potentially wrong, use AI to suggest correct one
@@ -114,6 +114,8 @@ async def insert_listing(
         "stock": stock,
         "status": "active",
         "metadata": metadata,
+        "user_name": user_name,  # Add user_name to payload
+        "user_phone": user_phone,  # Add user_phone to payload
     }
 
     if listing_id:

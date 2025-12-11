@@ -134,7 +134,9 @@ async def insert_listing_tool(
         stock=stock,
         metadata=metadata,
         images=images,
-        listing_id=listing_id
+        listing_id=listing_id,
+        user_name=CURRENT_REQUEST_USER_NAME,  # Pass user name
+        user_phone=CURRENT_REQUEST_USER_PHONE,  # Pass user phone
     )
 
 
@@ -1275,10 +1277,13 @@ class WorkflowInput(BaseModel):
     draft_listing_id: Optional[str] = None
     user_name: Optional[str] = None  # User's full name from Supabase profiles
     user_id: Optional[str] = None    # Authenticated user id for ownership checks
+    user_phone: Optional[str] = None  # User's phone number
 
 
 # Per-request context (set in run_workflow)
 CURRENT_REQUEST_USER_ID: Optional[str] = None
+CURRENT_REQUEST_USER_NAME: Optional[str] = None
+CURRENT_REQUEST_USER_PHONE: Optional[str] = None
 
 
 # Main workflow runner
@@ -1288,8 +1293,10 @@ async def run_workflow(workflow_input: WorkflowInput):
     Uses OpenAI Agents SDK with MCP tools
     """
     with trace("PazarGlobal"):
-        global CURRENT_REQUEST_USER_ID
+        global CURRENT_REQUEST_USER_ID, CURRENT_REQUEST_USER_NAME, CURRENT_REQUEST_USER_PHONE
         CURRENT_REQUEST_USER_ID = workflow_input.user_id
+        CURRENT_REQUEST_USER_NAME = workflow_input.user_name
+        CURRENT_REQUEST_USER_PHONE = workflow_input.user_phone
         workflow = workflow_input.model_dump()
         
         # Build conversation history from previous messages

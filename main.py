@@ -99,13 +99,16 @@ async def run_agent_workflow(request: AgentRequest):
     logger.info(f"🎯 Running agent workflow for user: {request.user_id}")
     logger.info(f"📝 Message: {request.message}")
     
-    # Get user profile from Supabase if phone provided
+    # Resolve user UUID from phone number (WhatsApp) or use provided user_id (Web)
+    resolved_user_id = request.user_id
     user_name = None
+    
     # Prefer explicit user_name from user_context
     if request.user_context and request.user_context.get("name"):
         user_name = request.user_context.get("name")
 
-    if not user_name and request.phone:
+    # If user_id looks like a phone number (starts with + or whatsapp:), resolve to UUID
+    if request.phone or (request.user_id and (request.user_id.startswith('+') or request.user_id.startswith('whatsapp:'))):
         try:
             import httpx
             supabase_url = os.getenv("SUPABASE_URL")
@@ -113,25 +116,28 @@ async def run_agent_workflow(request: AgentRequest):
             
             async with httpx.AsyncClient() as client:
                 # Clean phone number (remove 'whatsapp:' prefix if present)
-                clean_phone = request.phone.replace('whatsapp:', '').strip()
+                phone_to_lookup = request.phone or request.user_id
+                clean_phone = phone_to_lookup.replace('whatsapp:', '').strip()
                 
-                # Query profiles table by phone
+                # Query profiles table by phone to get UUID
                 profile_url = f"{supabase_url}/rest/v1/profiles"
                 headers = {
                     "apikey": supabase_key,
                     "Authorization": f"Bearer {supabase_key}"
                 }
-                params = {"phone": f"eq.{clean_phone}", "select": "full_name"}
+                params = {"phone": f"eq.{clean_phone}", "select": "id,full_name,phone"}
                 
                 resp = await client.get(profile_url, headers=headers, params=params)
                 if resp.is_success and resp.json():
                     profile = resp.json()[0]
-                    user_name = profile.get("full_name")
-                    logger.info(f"👤 User profile found: {user_name}")
+                    resolved_user_id = profile.get("id")  # ← UUID from profiles table
+                    user_name = user_name or profile.get("full_name")
+                    user_phone = profile.get("phone")  # Store phone for listing
+                    logger.info(f"✅ Resolved phone {clean_phone} → UUID: {resolved_user_id}, name: {user_name}")
                 else:
                     logger.warning(f"⚠️ No profile found for phone: {clean_phone}")
         except Exception as e:
-            logger.error(f"❌ Error fetching user profile: {str(e)}")
+            logger.error(f"❌ Error resolving user from phone: {str(e)}")
     
     try:
         # Run workflow using Agents SDK
@@ -143,7 +149,8 @@ async def run_agent_workflow(request: AgentRequest):
             media_type=request.media_type,
             draft_listing_id=request.draft_listing_id,
             user_name=user_name,  # Pass user name to workflow
-            user_id=request.user_id,
+            user_id=resolved_user_id,  # Use resolved UUID, not phone number
+            user_phone=user_phone if 'user_phone' in locals() else None,  # Pass user phone
         )
         result = await run_workflow(workflow_input)
         
@@ -254,6 +261,7 @@ async def web_chat_endpoint(request: AgentRequest):
                     draft_listing_id=request.draft_listing_id,
                     user_name=profile_full_name,
                     user_id=request.user_id,
+                    user_phone=user_phone,  # Pass user phone
                 )
                 result = await run_workflow(workflow_input)
                 
