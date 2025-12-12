@@ -57,6 +57,7 @@ TODO: Implement after Phase 3 (Listing Management) is complete.
 ============================================================
 """
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownArgumentType=false, reportMissingParameterType=false, reportMissingTypeArgument=false
+import os
 from agents import Agent, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
 from agents.tool import function_tool
 from openai import AsyncOpenAI
@@ -83,6 +84,21 @@ ListUserListingsFn = Callable[..., Awaitable[Dict[str, Any]]]
 update_listing: UpdateListingFn = cast(UpdateListingFn, _update_listing)
 delete_listing: DeleteListingFn = cast(DeleteListingFn, _delete_listing)
 list_user_listings: ListUserListingsFn = cast(ListUserListingsFn, _list_user_listings)
+
+# Supabase public bucket info for constructing vision-safe URLs
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_PUBLIC_BUCKET = os.getenv("SUPABASE_PUBLIC_BUCKET", "product-images").strip("/")
+
+
+def _resolve_public_image_url(path: str) -> str:
+    """Convert stored path to public URL for vision model access."""
+    if not path:
+        return path
+    if path.startswith("http://") or path.startswith("https://"):
+        return path
+    if not SUPABASE_URL:
+        return path
+    return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_PUBLIC_BUCKET}/{path.lstrip('/')}"
 
 # Native function tool definitions (plain Python async functions)
 @function_tool
@@ -1530,12 +1546,13 @@ async def run_workflow(workflow_input: WorkflowInput):
         vision_safety_result = None
         if media_paths:
             first_image: str = str(media_paths[0])
+            first_image_url: str = _resolve_public_image_url(first_image)
             vision_input: List[TResponseInputItem] = cast(List[TResponseInputItem], [
                 {
                     "role": "user",
                     "content": [
                         {"type": "input_text", "text": "Analyze the attached image for safety and product. Return JSON only."},
-                        {"type": "input_image", "image_url": {"url": first_image}}
+                        {"type": "input_image", "image_url": {"url": first_image_url}}
                     ]
                 }
             ])
