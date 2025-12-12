@@ -34,9 +34,16 @@ Modern AI destekli ilan platformu PazarGlobal'in ana backend servisi. OpenAI Age
 │                    ├──► POST /agent/run ──► Workflow       │
 │  Web Frontend ─────┘                        Runner         │
 │                                                ↓            │
-│                                         RouterAgent        │
-│                                         (Intent Classifier) │
-│                                                ↓            │
+│                              [STEP 0: Vision Safety Check]  │
+│                              VisionSafetyProductAgent       │
+│                                   ↓                         │
+│                           Safe? ──┬── No → Block + Log     │
+│                                   │                         │
+│                                  Yes                        │
+│                                   ↓                         │
+│                            RouterAgent                      │
+│                         (Intent Classifier)                 │
+│                                   ↓                         │
 │              ┌──────────────┬──────────────┬──────────┐     │
 │              ↓              ↓              ↓          ↓     │
 │         CreateListing  SearchAgent  UpdateListing  Delete  │
@@ -46,6 +53,7 @@ Modern AI destekli ilan platformu PazarGlobal'in ana backend servisi. OpenAI Age
 │                      Native Function Tools                  │
 │                              ↓                              │
 │                      Supabase Database                      │
+│                   (+ image_safety_flags table)             │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -54,6 +62,7 @@ Modern AI destekli ilan platformu PazarGlobal'in ana backend servisi. OpenAI Age
 - **Framework:** FastAPI 0.109+
 - **AI Engine:** OpenAI Agents SDK (Agent Builder)
 - **Model:** GPT-4 (configurable via ModelSettings)
+- **Vision Model:** GPT-4o-mini (vision-capable, lightweight)
 - **Database:** Supabase (PostgreSQL)
 - **Storage:** Supabase Storage (product-images bucket)
 - **Deployment:** Railway
@@ -62,6 +71,79 @@ Modern AI destekli ilan platformu PazarGlobal'in ana backend servisi. OpenAI Age
 ---
 
 ## 🎯 Agent Yapısı
+
+### 0. **VisionSafetyProductAgent** (Görsel Güvenlik + Ürün Tanıma) 🛡️
+**Görev:** Kullanıcının yüklediği görselleri analiz eder, illegal/güvensiz içerikleri tespit eder ve güvenli görsellerde ürün özetini çıkarır.
+
+**Özellikler:**
+- ✅ **Safety-First Yaklaşım:** İllegal içerik tespiti öncelikli
+- 🖼️ **Ürün Tanıma:** Kategori, marka, model, durum, fiyat tahmini
+- 🚫 **Auto-Block:** Güvensiz içerik tespit edilirse işlem durdurulur
+- 📝 **Supabase Logging:** Her flag `image_safety_flags` tablosuna kaydedilir
+- 👨‍💼 **Admin Review:** Manuel inceleme için pending statusü (otomatik ban yok)
+- ⚠️ **False Positive Önlemi:** Mayo, bikini, iç çamaşırı tek başına illegal değil
+
+**Workflow (Step 0 - Router'dan ÖNCE):**
+```
+1. media_paths kontrolü (görsel var mı?)
+2. İlk görseli VisionSafetyProductAgent'a gönder
+3. JSON response parse et:
+   ├─ safe=false veya allow_listing=false
+   │  ├─ log_image_safety_flag() ile Supabase'e kaydet
+   │  ├─ Kullanıcıya "❌ Güvenlik nedeniyle reddedildi" mesajı
+   │  └─ Return (Router'a GİTMEDEN işlem sonlanır)
+   │
+   └─ safe=true ve allow_listing=true
+      ├─ product_info'yu conversation_history'ye ekle
+      └─ RouterAgent'a devam et (normal akış)
+```
+
+**Output Schema:**
+```python
+class VisionSafetyProductSchema(BaseModel):
+    safe: bool  # Genel güvenlik
+    flag_type: str  # weapon, drugs, violence, sexual, hate, stolen, document, abuse, terrorism, unknown, none
+    confidence: str  # high, medium, low
+    message: str  # Detaylı açıklama
+    allow_listing: bool  # İlan yayına alınabilir mi?
+    product: Optional[Dict[str, Any]]  # Güvenli ise ürün bilgileri
+```
+
+**Illegal Content Kategorileri:**
+- Silah, kesici alet, patlayıcı
+- Uyuşturucu, tütün ürünleri
+- Şiddet içeriği, kan, yaralama
+- Cinsel içerik (çocuk istismarı, pornografi)
+- Nefret söylemi, ayrımcılık
+- Çalıntı ürün (imei, plaka belirsiz)
+- Sahte evrak, kimlik
+- Terör, suç örgütü içeriği
+
+**Örnek:**
+```
+Kullanıcı: [Bıçak görseli yükler]
+VisionSafetyProductAgent → safe=false, flag_type="weapon", confidence="high"
+→ Supabase'e kaydedilir (user_id, image_url, flag_type, message)
+→ "❌ Güvenlik nedeniyle reddedildi: Silah veya kesici alet tespit edildi"
+→ RouterAgent'a GİTMEZ, işlem burada biter
+
+Kullanıcı: [iPhone 13 fotoğrafı yükler]
+VisionSafetyProductAgent → safe=true, allow_listing=true
+→ product: {"category": "Elektronik", "brand": "Apple", "model": "iPhone 13"...}
+→ Conversation history'ye ürün özeti eklenir
+→ RouterAgent → CreateListingAgent (ürün bilgileri pre-filled)
+```
+
+**Model:** `gpt-4o-mini` (vision-capable, cost-effective)
+
+**Supabase Logging Table: `image_safety_flags`**
+```sql
+- id, user_id, image_url, flag_type, confidence, message
+- status (pending/confirmed/dismissed/banned)
+- created_at, reviewed_at, reviewer, notes
+```
+
+---
 
 ### 1. **RouterAgent** (Intent Classifier)
 **Görev:** Kullanıcı mesajını analiz ederek hangi specialized agent'a yönlendireceğine karar verir.
@@ -675,24 +757,64 @@ SearchAgent: "50 ilan bulundu (2 premium). İlk 5'i göstereyim mi?"
 
 ---
 
-### Phase 4: ImageAgent (Vision AI) 🖼️
-**Timeline:** 2 hafta
+### Phase 4: VisionSafetyProductAgent ✅ **COMPLETED**
+**Status:** ✅ Deployed and Active (December 2025)
 
 **Features:**
-- OpenAI Vision API ile ürün tanıma
-- Marka/model çıkarımı
-- Otomatik kategori tespiti
-- Fiyat tahmin algoritması
-- Ürün durumu analizi (yeni/kullanılmış)
+- ✅ OpenAI Vision API (GPT-4o-mini) ile ürün tanıma
+- ✅ İllegal/güvensiz içerik tespiti (Safety-First)
+- ✅ Otomatik kategori, marka, model çıkarımı
+- ✅ Fiyat tahmin algoritması
+- ✅ Ürün durumu analizi (yeni/kullanılmış)
+- ✅ Supabase logging (image_safety_flags table)
+- ✅ Router pre-check (Step 0 entegrasyonu)
+- ✅ Admin review workflow (manuel ban)
+- ✅ False positive önlemleri (mayo/bikini NOT illegal)
 
-**Tools:**
+**Implementation:**
 ```python
-@function_tool
-async def analyze_product_image_tool(image_path: str) -> Dict:
-    """Vision API ile ürün analizi"""
-    # OpenAI Vision call
-    # Return: category, brand, model, condition, estimated_price
+# VisionSafetyProductAgent definition in workflow.py
+vision_safety_product_agent = Agent(
+    name="VisionSafetyProductAgent",
+    instructions="""Safety first. Illegal content detection priority.
+    Output STRICT JSON: {safe, flag_type, confidence, message, product, allow_listing}""",
+    model="gpt-4o-mini",
+    output_type=VisionSafetyProductSchema
+)
+
+# Step 0 integration (pre-router check)
+if media_paths:
+    vision_result = await Runner.run(vision_safety_product_agent, input=vision_input)
+    if not vision_result.safe or not vision_result.allow_listing:
+        log_image_safety_flag(...)  # Supabase'e kaydet
+        return {"response": "❌ Güvenlik nedeniyle reddedildi", "success": False}
+    # Safe: product summary'yi conversation_history'ye ekle
 ```
+
+**Supabase Schema:**
+```sql
+-- image_safety_flags table (created via supabase/image_safety_flags.sql)
+CREATE TABLE image_safety_flags (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    image_url TEXT,
+    flag_type TEXT CHECK (flag_type IN ('weapon','drugs','violence','sexual','hate','stolen','document','abuse','terrorism','unknown','none')),
+    confidence TEXT CHECK (confidence IN ('high','medium','low')),
+    message TEXT NOT NULL,
+    status TEXT DEFAULT 'pending' CHECK (status IN ('pending','confirmed','dismissed','banned')),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    reviewed_at TIMESTAMPTZ,
+    reviewer TEXT,
+    notes TEXT
+);
+-- Indexes: user_id, status, created_at, (flag_type, status)
+```
+
+**Testing Status:**
+- ✅ Safe image → Product summary injected, listing created
+- ✅ Unsafe image → Blocked + logged, no router call
+- ✅ Mayo/bikini → NOT flagged (false positive prevention)
+- ⏳ Live testing in production environment
 
 ---
 
