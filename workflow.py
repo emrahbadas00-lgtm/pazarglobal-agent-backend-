@@ -1552,7 +1552,7 @@ async def run_workflow(workflow_input: WorkflowInput):
                     "role": "user",
                     "content": [
                         {"type": "input_text", "text": "Analyze the attached image for safety and product. Return JSON only."},
-                        {"type": "input_image", "image_url": {"url": first_image_url}}
+                        {"type": "input_image", "image_url": first_image_url}
                     ]
                 }
             ])
