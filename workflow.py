@@ -56,6 +56,7 @@ IMPLEMENTATION PLAN:
 TODO: Implement after Phase 3 (Listing Management) is complete.
 ============================================================
 """
+# pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownArgumentType=false, reportMissingParameterType=false, reportMissingTypeArgument=false
 from agents import Agent, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
 from agents.tool import function_tool
 from openai import AsyncOpenAI
@@ -63,16 +64,25 @@ from types import SimpleNamespace
 from guardrails.runtime import load_config_bundle, instantiate_guardrails, run_guardrails
 from pydantic import BaseModel
 from openai.types.shared.reasoning import Reasoning
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Iterable, Callable, Awaitable, cast
 
 # Import tool implementations
 from tools.clean_price import clean_price
 from tools.insert_listing import insert_listing
 from tools.search_listings import search_listings
-from tools.update_listing import update_listing
-from tools.delete_listing import delete_listing
-from tools.list_user_listings import list_user_listings
+from tools.update_listing import update_listing as _update_listing
+from tools.delete_listing import delete_listing as _delete_listing
+from tools.list_user_listings import list_user_listings as _list_user_listings
+from tools.safety_log import log_image_safety_flag
 
+
+UpdateListingFn = Callable[..., Awaitable[Dict[str, Any]]]
+DeleteListingFn = Callable[..., Awaitable[Dict[str, Any]]]
+ListUserListingsFn = Callable[..., Awaitable[Dict[str, Any]]]
+
+update_listing: UpdateListingFn = cast(UpdateListingFn, _update_listing)
+delete_listing: DeleteListingFn = cast(DeleteListingFn, _delete_listing)
+list_user_listings: ListUserListingsFn = cast(ListUserListingsFn, _list_user_listings)
 
 # Native function tool definitions (plain Python async functions)
 @function_tool
@@ -264,7 +274,7 @@ ctx = SimpleNamespace(guardrail_llm=client)
 
 
 # Guardrails configuration
-guardrails_sanitize_input_config = {
+guardrails_sanitize_input_config: Dict[str, List[Dict[str, Any]]] = {
     "guardrails": [
         {"name": "Jailbreak", "config": {"model": "gpt-4.1-mini", "confidence_threshold": 0.7}},
         {"name": "Moderation", "config": {"categories": ["sexual/minors", "hate/threatening", "harassment/threatening", "self-harm/instructions", "violence/graphic", "illicit/violent"]}},
@@ -273,24 +283,32 @@ guardrails_sanitize_input_config = {
 }
 
 
-def guardrails_has_tripwire(results):
-    return any((hasattr(r, "tripwire_triggered") and (r.tripwire_triggered is True)) for r in (results or []))
+def guardrails_has_tripwire(results: Optional[Iterable[Any]]) -> bool:
+    return any((hasattr(r, "tripwire_triggered") and (getattr(r, "tripwire_triggered") is True)) for r in (results or []))
 
 
-def get_guardrail_safe_text(results, fallback_text):
+def get_guardrail_safe_text(results: Optional[Iterable[Any]], fallback_text: str) -> str:
     for r in (results or []):
-        info = (r.info if hasattr(r, "info") else None) or {}
+        info: Any = (r.info if hasattr(r, "info") else None) or {}
         if isinstance(info, dict) and ("checked_text" in info):
-            return info.get("checked_text") or fallback_text
-    pii = next(((r.info if hasattr(r, "info") else {}) for r in (results or []) if isinstance((r.info if hasattr(r, "info") else None) or {}, dict) and ("anonymized_text" in ((r.info if hasattr(r, "info") else None) or {}))), None)
+            return str(info.get("checked_text") or fallback_text)
+    pii = next(
+        (
+            (r.info if hasattr(r, "info") else {})
+            for r in (results or [])
+            if isinstance((r.info if hasattr(r, "info") else None) or {}, dict)
+            and ("anonymized_text" in ((r.info if hasattr(r, "info") else None) or {}))
+        ),
+        None,
+    )
     if isinstance(pii, dict) and ("anonymized_text" in pii):
-        return pii.get("anonymized_text") or fallback_text
+        return str(pii.get("anonymized_text") or fallback_text)
     return fallback_text
 
 
-async def scrub_conversation_history(history, config):
+async def scrub_conversation_history(history: Optional[Iterable[Dict[str, Any]]], config: Optional[Dict[str, Any]]):
     try:
-        guardrails = (config or {}).get("guardrails") or []
+        guardrails: List[Dict[str, Any]] = (config or {}).get("guardrails") or []
         pii = next((g for g in guardrails if (g or {}).get("name") == "Contains PII"), None)
         if not pii:
             return
@@ -299,15 +317,16 @@ async def scrub_conversation_history(history, config):
             content = (msg or {}).get("content") or []
             for part in content:
                 if isinstance(part, dict) and part.get("type") == "input_text" and isinstance(part.get("text"), str):
-                    res = await run_guardrails(ctx, part["text"], "text/plain", instantiate_guardrails(load_config_bundle(pii_only)), suppress_tripwire=True, raise_guardrail_errors=True)
+                    pii_bundle: Any = load_config_bundle(cast(Any, pii_only))
+                    res = await run_guardrails(ctx, part["text"], "text/plain", instantiate_guardrails(pii_bundle), suppress_tripwire=True, raise_guardrail_errors=True)
                     part["text"] = get_guardrail_safe_text(res, part["text"])
     except Exception:
         pass
 
 
-async def scrub_workflow_input(workflow, input_key, config):
+async def scrub_workflow_input(workflow: Optional[Dict[str, Any]], input_key: str, config: Optional[Dict[str, Any]]):
     try:
-        guardrails = (config or {}).get("guardrails") or []
+        guardrails: List[Dict[str, Any]] = (config or {}).get("guardrails") or []
         pii = next((g for g in guardrails if (g or {}).get("name") == "Contains PII"), None)
         if not pii:
             return
@@ -317,15 +336,17 @@ async def scrub_workflow_input(workflow, input_key, config):
         if not isinstance(value, str):
             return
         pii_only = {"guardrails": [pii]}
-        res = await run_guardrails(ctx, value, "text/plain", instantiate_guardrails(load_config_bundle(pii_only)), suppress_tripwire=True, raise_guardrail_errors=True)
+        pii_bundle: Any = load_config_bundle(cast(Any, pii_only))
+        res = await run_guardrails(ctx, value, "text/plain", instantiate_guardrails(pii_bundle), suppress_tripwire=True, raise_guardrail_errors=True)
         workflow[input_key] = get_guardrail_safe_text(res, value)
     except Exception:
         pass
 
 
-async def run_and_apply_guardrails(input_text, config, history, workflow):
-    results = await run_guardrails(ctx, input_text, "text/plain", instantiate_guardrails(load_config_bundle(config)), suppress_tripwire=True, raise_guardrail_errors=True)
-    guardrails = (config or {}).get("guardrails") or []
+async def run_and_apply_guardrails(input_text: str, config: Optional[Dict[str, Any]], history: Optional[Iterable[Any]], workflow: Optional[Dict[str, Any]]):
+    config_bundle: Any = load_config_bundle(cast(Any, config))
+    results = await run_guardrails(ctx, input_text, "text/plain", instantiate_guardrails(config_bundle), suppress_tripwire=True, raise_guardrail_errors=True)
+    guardrails: List[Dict[str, Any]] = (config or {}).get("guardrails") or []
     mask_pii = next((g for g in guardrails if (g or {}).get("name") == "Contains PII" and ((g or {}).get("config") or {}).get("block") is False), None) is not None
     if mask_pii:
         await scrub_conversation_history(history, config)
@@ -418,6 +439,58 @@ Respond with JSON only: {"intent": "create_listing"}
         store=True,
         reasoning=Reasoning(
             effort="medium",
+            summary="auto"
+        )
+    )
+)
+
+
+class VisionSafetyProductSchema(BaseModel):
+    safe: bool
+    flag_type: str
+    confidence: str
+    message: str
+    allow_listing: bool
+    product: Optional[Dict[str, Any]] = None
+
+
+vision_safety_product_agent = Agent(
+    name="VisionSafetyProductAgent",
+    instructions="""
+You are a Vision Safety & Product Agent.
+
+PRIMARY: Run safety first. If any illegal/unsafe suspicion → flag and stop. Do NOT give product info when unsafe.
+
+Illegal / unsafe (examples): child exploitation, sexual explicit content, extreme violence/abuse, hate/terror symbols, weapons/ammunition, drugs/narcotics, stolen/tampered serial numbers, fake IDs/official documents, animal cruelty. Mayo/bikini/underwear/sportswear are NOT illegal by themselves; avoid false positives.
+
+Steps:
+1) Safety check (mandatory). If unsure, choose unsafe. If unsafe → allow_listing=false and product=null.
+2) If safe → concise product detection: title, category, 2-3 attributes, condition (new/used/unknown), quantity (default 1). No price estimation. No image generation.
+
+Output STRICT JSON:
+{
+  "safe": true | false,
+  "flag_type": "none | weapon | drugs | violence | abuse | terrorism | stolen | document | sexual | hate | unknown",
+  "confidence": "high | medium | low",
+  "message": "short explanation",
+  "product": {
+    "title": "string or null",
+    "category": "string or null",
+    "attributes": ["..."],
+    "condition": "new | used | unknown",
+    "quantity": 1
+  },
+  "allow_listing": true | false
+}
+
+Rules: Never generate images. Never speculate beyond what is visible. Safety overrides functionality. When unsafe, product fields must be null.
+""",
+    model="gpt-4o-mini",  # vision-capable lightweight
+    output_type=VisionSafetyProductSchema,
+    model_settings=ModelSettings(
+        store=False,
+        reasoning=Reasoning(
+            effort="low",
             summary="auto"
         )
     )
@@ -1342,7 +1415,7 @@ Tools:
 # Workflow input schema
 class WorkflowInput(BaseModel):
     input_as_text: str
-    conversation_history: list = []  # Previous messages from WhatsApp Bridge
+    conversation_history: List[Dict[str, Any]] = []  # Previous messages from WhatsApp Bridge
     media_paths: Optional[List[str]] = None
     media_type: Optional[str] = None
     draft_listing_id: Optional[str] = None
@@ -1365,13 +1438,13 @@ async def run_workflow(workflow_input: WorkflowInput):
     """
     with trace("PazarGlobal"):
         global CURRENT_REQUEST_USER_ID, CURRENT_REQUEST_USER_NAME, CURRENT_REQUEST_USER_PHONE
-        CURRENT_REQUEST_USER_ID = workflow_input.user_id
-        CURRENT_REQUEST_USER_NAME = workflow_input.user_name
-        CURRENT_REQUEST_USER_PHONE = workflow_input.user_phone
+        CURRENT_REQUEST_USER_ID = workflow_input.user_id  # pyright: ignore[reportConstantRedefinition]
+        CURRENT_REQUEST_USER_NAME = workflow_input.user_name  # pyright: ignore[reportConstantRedefinition]
+        CURRENT_REQUEST_USER_PHONE = workflow_input.user_phone  # pyright: ignore[reportConstantRedefinition]
         workflow = workflow_input.model_dump()
         
         # Build conversation history from previous messages
-        conversation_history: list[TResponseInputItem] = []
+        conversation_history: List[TResponseInputItem] = []
         
         # Add previous conversation context if exists (NOT including current message)
         for msg in workflow.get("conversation_history", []):
@@ -1384,7 +1457,7 @@ async def run_workflow(workflow_input: WorkflowInput):
             
             # CRITICAL: OpenAI Agents SDK uses different content types for user vs assistant
             if role == "user":
-                conversation_history.append({
+                conversation_history.append(cast(TResponseInputItem, {
                     "role": "user",
                     "content": [
                         {
@@ -1392,9 +1465,9 @@ async def run_workflow(workflow_input: WorkflowInput):
                             "text": content
                         }
                     ]
-                })
+                }))
             elif role == "assistant":
-                conversation_history.append({
+                conversation_history.append(cast(TResponseInputItem, {
                     "role": "assistant",
                     "content": [
                         {
@@ -1402,7 +1475,7 @@ async def run_workflow(workflow_input: WorkflowInput):
                             "text": content
                         }
                     ]
-                })
+                }))
         
         # Add current user message (this is the new message to process)
         current_message_text = workflow["input_as_text"]
@@ -1411,7 +1484,7 @@ async def run_workflow(workflow_input: WorkflowInput):
         if workflow.get("user_name"):
             current_message_text = f"[USER_NAME: {workflow['user_name']}] {current_message_text}"
         
-        conversation_history.append({
+        conversation_history.append(cast(TResponseInputItem, {
             "role": "user",
             "content": [
                 {
@@ -1419,16 +1492,16 @@ async def run_workflow(workflow_input: WorkflowInput):
                     "text": current_message_text
                 }
             ]
-        })
+        }))
 
         # Attach media/context note so agents see uploaded paths and draft id
         if workflow.get("media_paths") or workflow.get("draft_listing_id"):
-            media_note_parts = []
+            media_note_parts: List[str] = []
             if workflow.get("draft_listing_id"):
                 media_note_parts.append(f"DRAFT_LISTING_ID={workflow['draft_listing_id']}")
             if workflow.get("media_paths"):
                 media_note_parts.append(f"MEDIA_PATHS={workflow['media_paths']}")
-            conversation_history.append({
+            conversation_history.append(cast(TResponseInputItem, {
                 "role": "assistant",
                 "content": [
                     {
@@ -1436,7 +1509,7 @@ async def run_workflow(workflow_input: WorkflowInput):
                         "text": f"[SYSTEM_MEDIA_NOTE] {' | '.join(media_note_parts)}"
                     }
                 ]
-            })
+            }))
         
         # Run guardrails
         guardrails_input_text = workflow["input_as_text"]
@@ -1450,6 +1523,75 @@ async def run_workflow(workflow_input: WorkflowInput):
         
         if guardrails_hastripwire:
             return {"error": "Content blocked by guardrails"}
+
+        # Step 0: Vision safety + product extraction (if media provided)
+        media_paths_raw = workflow.get("media_paths")
+        media_paths: List[str] = media_paths_raw if isinstance(media_paths_raw, list) else ([] if media_paths_raw is None else [str(media_paths_raw)])
+        vision_safety_result = None
+        if media_paths:
+            first_image: str = str(media_paths[0])
+            vision_input: List[TResponseInputItem] = cast(List[TResponseInputItem], [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Analyze the attached image for safety and product. Return JSON only."},
+                        {"type": "input_image", "image_url": {"url": first_image}}
+                    ]
+                }
+            ])
+
+            try:
+                vision_result_temp = await Runner.run(
+                    vision_safety_product_agent,
+                    input=vision_input,  # type: ignore[arg-type]
+                    run_config=RunConfig(trace_metadata={
+                        "__trace_source__": "agent-builder",
+                        "workflow_id": "vision_safety_product"
+                    })
+                )
+                vision_safety_result = vision_result_temp.final_output.model_dump()
+            except Exception as exc:  # pragma: no cover
+                return {
+                    "response": f"Görsel analizinde hata oluştu: {exc}",
+                    "intent": "vision_safety_error",
+                    "success": False
+                }
+
+            if not vision_safety_result.get("safe") or not vision_safety_result.get("allow_listing", False):
+                # Log flag for admin review (no auto-ban)
+                log_image_safety_flag(
+                    user_id=workflow.get("user_id"),
+                    image_url=str(first_image),
+                    flag_type=vision_safety_result.get("flag_type", "unknown"),
+                    confidence=vision_safety_result.get("confidence", "low"),
+                    message=vision_safety_result.get("message", "unsafe"),
+                )
+
+                return {
+                    "response": f"❌ Güvenlik nedeniyle reddedildi: {vision_safety_result.get('message', 'unsafe image')}. Bu görsel işleme alınmadı, lütfen farklı bir görsel gönderin.",
+                    "intent": "vision_safety_blocked",
+                    "success": False
+                }
+
+            # Safe: append compact product summary for downstream agents
+            product_info: Dict[str, Any] = vision_safety_result.get("product") or {}
+            product_attrs = ", ".join(cast(List[str], product_info.get("attributes", []) or []))
+            conversation_history.append(cast(TResponseInputItem, {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": (
+                            f"[VISION_PRODUCT] safe=true; allow_listing={vision_safety_result.get('allow_listing', True)}; "
+                            f"title={product_info.get('title') or 'unknown'}; "
+                            f"category={product_info.get('category') or 'unknown'}; "
+                            f"condition={product_info.get('condition') or 'unknown'}; "
+                            f"quantity={product_info.get('quantity') or 1}; "
+                            f"attributes={product_attrs or 'none'}"
+                        )
+                    }
+                ]
+            }))
         
         # Step 1: Classify intent
         router_agent_intent_classifier_result_temp = await Runner.run(
