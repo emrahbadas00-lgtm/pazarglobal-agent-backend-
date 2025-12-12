@@ -197,6 +197,12 @@ async def update_listing_tool(
         title, price, condition, category, description, location, stock, metadata: Güncellenecek alanlar
         images: Güncel fotoğraf path listesi (tam liste gönderilir)
     """
+    if not CURRENT_REQUEST_USER_ID:
+        return {
+            "success": False,
+            "error": "not_authenticated",
+            "message": "User not authenticated",
+        }
     return await update_listing(
         listing_id=listing_id,
         user_id=CURRENT_REQUEST_USER_ID,
@@ -220,6 +226,12 @@ async def delete_listing_tool(listing_id: str) -> Dict[str, Any]:
     Args:
         listing_id: Silinecek ilan ID (zorunlu)
     """
+    if not CURRENT_REQUEST_USER_ID:
+        return {
+            "success": False,
+            "error": "not_authenticated",
+            "message": "User not authenticated",
+        }
     return await delete_listing(listing_id=listing_id, user_id=CURRENT_REQUEST_USER_ID)
 
 
@@ -236,6 +248,13 @@ async def list_user_listings_tool(
         limit: Sonuç sayısı limiti
     """
     resolved_user = user_id or CURRENT_REQUEST_USER_ID
+    if not resolved_user:
+        return {
+            "success": False,
+            "error": "not_authenticated",
+            "message": "User not authenticated",
+            "listings": [],
+        }
     return await list_user_listings(user_id=resolved_user, limit=limit)
 
 
@@ -372,7 +391,7 @@ Respond ONLY with valid JSON following the schema.
 - delete_listing: "sil", "kaldır", "ilanımı iptal"
 - publish_listing: "onayla", "yayınla" (only if draft exists)
 - search_product: "almak", "arıyorum", "var mı", "bul", "uygun"
-- small_talk: "merhaba", "selam", "teşekkür"
+- small_talk: "merhaba", "selam", "teşekkür", "sohbet", "muhabbet", "kafa dağıt", "konuşalım", "gevez", "lafla"
 - cancel: "iptal", "vazgeç", "sıfırla"
 
 ## Priority Logic:
@@ -1037,9 +1056,20 @@ Ne yapmak istersiniz?"
 
 updatelistingagent = Agent(
     name="UpdateListingAgent",
-    instructions="""# UpdateListingAgent Instructions
+        instructions="""# UpdateListingAgent Instructions
 
 Update user's existing listings with support for metadata updates.
+
+✅ IMPORTANT STYLE (VERY SHORT):
+- If user is not authenticated OR ownership cannot be verified, respond in 1–2 short sentences.
+- No bullet lists, no long explanations.
+- At most ONE question.
+
+When you cannot update (common cases):
+- If list_user_listings_tool returns error=not_authenticated:
+    Say: "Kusura bakma, giriş yapmadığın için ilanını değiştiremiyorum." (Optionally ask: "Giriş yapalım mı?")
+- If user tries to change a listing that isn't theirs / not found in their listings:
+    Say: "Kusura bakma, bu ilan sana ait değilse değiştiremem." (No extra details)
 
 📸 Photo updates:
 - If user says "fotoğraf ekle" or shares new photo paths, merge with existing and send full images list
@@ -1112,55 +1142,53 @@ smalltalkagent = Agent(
     name="SmallTalkAgent",
     instructions="""You are SmallTalkAgent of PazarGlobal.
 
-🎯 Task: Handle greetings, help clarify user intent.
+🎯 Task: Handle greetings + casual chat, keep it warm and SHORT, and gently guide back to marketplace actions.
 
 💡 PERSONALIZATION:
-- If [USER_NAME: Full Name] → use name: "Merhaba Emrah! 👋"
-- DO NOT show [USER_NAME: ...] tag to user
+- If [USER_NAME: Full Name] → use name naturally (e.g., "Merhaba Emrah!").
+- DO NOT show [USER_NAME: ...] tag to user.
 
-## TWO MODES:
-
-### MODE 1: GREETING (User says: merhaba, selam, hi)
-✅ SHORT response (1-2 sentences with proper punctuation):
-"Merhaba! Ne yapmak istersiniz? İlan vermek mi, ürün aramak mı?"
+✅ STYLE RULES (IMPORTANT):
+- Keep responses 1–3 short sentences.
+- Be friendly, not robotic; avoid being harsh/overly task-only.
+- Do NOT write long explanations or long lists.
+- At most ONE question.
+- If user just wants to "bakıp çıkıcam" or "sohbet/muhabbet" → allow it, but softly offer an action option.
+- Avoid emojis unless the user uses them first.
 
 🎙️ TURKISH TTS VOICE OPTIMIZATION:
-- Commas for natural pauses: "Merhaba, nasıl yardımcı olabilirim?"
-- Question marks always: "Ne yapmak istersiniz?"
-- Periods for statements: "Size yardımcı olabilirim."
-- Keep greetings warm and natural with proper intonation cues
+- Use commas for natural pauses.
+- Always end questions with '?'.
+- End statements with '.'.
+- Keep sentences short (max ~15 words).
 
-### MODE 2: CLARIFICATION (User is unclear/indecisive)
-When user says:
-- "bilmiyorum"
-- "ne yapabilirim"
-- "yardım"
-- "kararsızım"
-- "ne tür ilanlar var"
+## MODES
 
-✅ Help them decide with OPTIONS (with proper punctuation for TTS):
-"PazarGlobal'de şunları yapabilirsiniz:
+### MODE 1: GREETING
+User: "selam", "merhaba"
+Reply example:
+"Merhaba! İstersen kısaca sohbet edelim, istersen de ürün arayalım. Ne yapmak istersin?"
 
-🛒 İlan Vermek: Ürün satmak veya kiralamak için.
-→ Örnek: 'iPhone satmak istiyorum'
+### MODE 2: CHATTERBOX / CASUAL CHAT
+User: "sohbet edelim", "muhabbet", "kafa dağıt", konu dışı kısa konuşma
+Reply pattern:
+1) Short, friendly answer/acknowledgement.
+2) One gentle nudge: "Bu arada, aradığın bir ürün var mı?" OR "İlan vermeyi mi düşünüyorsun?"
 
-🔍 Ürün Aramak: Almak veya kiralamak için.
-→ Örnek: 'Araba arıyorum'
+### MODE 3: INDECISIVE / UNDECIDED
+User: "kararsızım", "ne yapabilirim", "bakıyorum"
+Reply example:
+"Sorun değil. İstersen önce ne aradığına bakalım, ya da satmak istediğin ürünü söyle. Hangisi?"
 
-📋 İlanlarım: Mevcut ilanlarınızı görmek için.
-→ 'ilanlarımı göster' yazın
-
-Ne yapmak istersiniz?"
-
-### MODE 3: NORMAL CHAT (Questions about platform)
-- Answer questions about PazarGlobal naturally
-- Keep responses friendly and helpful
-- Guide back to action: "İlan vermek ister misiniz?"
+### MODE 4: PLATFORM QUESTIONS
+Keep answers short, then offer next step.
+Example:
+"Burada ilan verebilir veya ürün arayabilirsin. Ne arıyorsun?"
 
 ❌ AVOID:
-- Long unnecessary explanations for simple greetings
-- Repeating yourself
-- Fake enthusiasm ("Harika! Süper! Müthiş!")
+- Long unnecessary explanations.
+- Multi-question interrogations.
+- Overly formal, salesy tone.
 
 🚫 No tools needed.""",
     model="gpt-5.1",
@@ -1273,9 +1301,20 @@ Yeni bir işlem için:
 
 deletelistingagent = Agent(
     name="DeleteListingAgent",
-    instructions="""# DeleteListingAgent Instructions
+        instructions="""# DeleteListingAgent Instructions
 
 Delete user's listings.
+
+✅ IMPORTANT STYLE (VERY SHORT):
+- If user is not authenticated OR ownership cannot be verified, respond in 1–2 short sentences.
+- No bullet lists, no long explanations.
+- At most ONE question.
+
+When you cannot delete (common cases):
+- If list_user_listings_tool returns error=not_authenticated:
+    Say: "Kusura bakma, giriş yapmadığın için ilanını silemem." (Optionally ask: "Giriş yapalım mı?")
+- If user tries to delete a listing that isn't theirs / not found in their listings:
+    Say: "Kusura bakma, bu ilan sana ait değilse silemem." (No extra details)
 
 Flow:
 1. Call list_user_listings_tool
