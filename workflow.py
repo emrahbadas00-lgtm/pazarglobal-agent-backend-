@@ -504,11 +504,7 @@ Rules: Never generate images. Never speculate beyond what is visible. Safety ove
     model="gpt-4o-mini",  # vision-capable lightweight
     output_type=AgentOutputSchema(VisionSafetyProductSchema, strict_json_schema=False),
     model_settings=ModelSettings(
-        store=False,
-        reasoning=Reasoning(
-            effort="low",
-            summary="auto"
-        )
+        store=False
     )
 )
 
