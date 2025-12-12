@@ -58,7 +58,7 @@ TODO: Implement after Phase 3 (Listing Management) is complete.
 """
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownArgumentType=false, reportMissingParameterType=false, reportMissingTypeArgument=false
 import os
-from agents import Agent, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
+from agents import Agent, AgentOutputSchema, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
 from agents.tool import function_tool
 from openai import AsyncOpenAI
 from types import SimpleNamespace
@@ -502,7 +502,7 @@ Output STRICT JSON:
 Rules: Never generate images. Never speculate beyond what is visible. Safety overrides functionality. When unsafe, product fields must be null.
 """,
     model="gpt-4o-mini",  # vision-capable lightweight
-    output_type=VisionSafetyProductSchema,
+    output_type=AgentOutputSchema(VisionSafetyProductSchema, strict_json_schema=False),
     model_settings=ModelSettings(
         store=False,
         reasoning=Reasoning(
