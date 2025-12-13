@@ -400,7 +400,7 @@ Respond ONLY with valid JSON following the schema.
 
 ## Valid Intents:
 - **"create_listing"** → user wants to SELL an item OR editing a DRAFT listing (not yet published)
-- **"update_listing"** → user wants to CHANGE an EXISTING published listing
+- **"update_listing"** → user wants to CHANGE an EXISTING published listing (after "İlan yayınlandı" message)
 - **"delete_listing"** → user wants to DELETE/REMOVE existing listing
 - **"publish_listing"** → user CONFIRMS listing (wants to finalize and publish)
 - **"search_product"** → user wants to BUY or SEARCH
@@ -419,16 +419,24 @@ Respond ONLY with valid JSON following the schema.
 - "onayla" / "yayınla" → **publish_listing** (finalize draft)
 - "iptal" → **cancel**
 
+### 📋 If conversation has "✅ İlan yayınlandı" message:
+→ Listing is NOW PUBLISHED, any changes = update_listing
+
+**In this context:**
+- "başlık değiştir" / "yazım yanlış" → **update_listing** (editing PUBLISHED listing)
+- "fiyat güncelle" → **update_listing**
+- CRITICAL: Look for recent "İlan ID: [uuid]" in conversation to identify which listing
+
 ### 📋 If conversation has NO preview/draft context:
 → Normal intent classification
 
 **Keywords:**
 - create_listing: "satıyorum", "satmak", "satayım", "-um var", "ilan vermek"
-- update_listing: "değiştir", "güncelle", "fiyat ... yap", "düzenle" + mentions specific listing ID/title
+- update_listing: "değiştir", "güncelle", "fiyat ... yap", "düzenle", "yazım yanlış", "düzelt" (if mentions recently published listing)
 - delete_listing: "sil", "kaldır", "ilanımı iptal"
 - publish_listing: "onayla", "yayınla" (only if draft exists)
-- search_product: "almak", "arıyorum", "var mı", "bul", "uygun"
-- small_talk: "merhaba", "selam", "teşekkür", "sohbet", "muhabbet", "kafa dağıt", "konuşalım", "gevez", "lafla"
+- search_product: "almak", "arıyorum", "var mı", "bul", "uygun", "satın al"
+- small_talk: "merhaba", "selam", "teşekkür", "sohbet", "muhabbet", "kafa dağıt", "konuşalım", "gevez", "lafla", "ne görüyorsun"
 - cancel: "iptal", "vazgeç", "sıfırla"
 
 ## Priority Logic:
@@ -529,7 +537,10 @@ listingagent = Agent(
 ### Rule 3: REQUIRED FIELDS (collect in order):
 1. **Product/Title** - What are they selling?
 2. **Price** - Call clean_price_tool if text like "900 bin"
-3. **Condition** - "new", "used", or "refurbished"
+3. **Condition** - ONLY use these values: "new", "used", "refurbished" (NEVER "Az kullanılmış", "Sıfır" etc)
+   - "sıfır", "yeni" → "new"
+   - "az kullanılmış", "kullanılmış", "2.el" → "used"
+   - "yenilendi", "restore" → "refurbished"
 4. **Category** - Auto-assign from:
   📱 Elektronik | 🚗 Otomotiv | 🏠 Emlak | 🛋️ Mobilya & Dekorasyon | 👕 Giyim & Aksesuar
   🍎 Gıda & İçecek | 💄 Kozmetik & Kişisel Bakım | 📚 Kitap, Dergi & Müzik | 🏃 Spor & Outdoor
@@ -1150,8 +1161,14 @@ Update user's existing listings with support for metadata updates.
 - No bullet lists, no long explanations.
 - At most ONE question.
 
+🔍 RECENT LISTING CONTEXT:
+- FIRST check conversation history for "✅ İlan yayınlandı" and "İlan ID: [uuid]" from recent messages
+- If found, this is the listing user wants to update (they just created it!)
+- Use this listing_id directly for update_listing_tool
+- NO NEED to call list_user_listings_tool if listing_id is in recent conversation
+
 When you cannot update (common cases):
-- If list_user_listings_tool returns error=not_authenticated:
+- If no recent listing_id in conversation AND list_user_listings_tool returns error=not_authenticated:
     Say: "Kusura bakma, giriş yapmadığın için ilanını değiştiremiyorum." (Optionally ask: "Giriş yapalım mı?")
 - If user tries to change a listing that isn't theirs / not found in their listings:
     Say: "Kusura bakma, bu ilan sana ait değilse değiştiremem." (No extra details)
