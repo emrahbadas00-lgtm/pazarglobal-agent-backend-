@@ -440,13 +440,16 @@ Respond ONLY with valid JSON following the schema.
 - cancel: "iptal", "vazgeç", "sıfırla"
 
 ## Priority Logic:
-1. **Check conversation history for "📝 İlan önizlemesi"**
+1. **If [VISION_PRODUCT] exists in history BUT user message is EMPTY or very short (< 5 words):**
+   → **small_talk** (let SmallTalkAgent describe the image and ask what user wants to do)
+   → Example: User sends only photo → SmallTalk: "Görselde bordo kazak görüyorum. Satmak mı istersin?"
+2. **Check conversation history for "📝 İlan önizlemesi"**
    - If found → "onayla" = publish_listing, edits = create_listing
-2. If user mentions product to sell → create_listing
-3. If user confirms/approves → publish_listing  
-4. If user searches ("var mı") → search_product
-5. **Unclear/Indecisive user** ("bilmiyorum", "ne yapabilirim", "yardım", "kararsızım") → small_talk (will clarify options)
-6. Default → small_talk
+3. If user mentions product to sell → create_listing
+4. If user confirms/approves → publish_listing  
+5. If user searches ("var mı") → search_product
+6. **Unclear/Indecisive user** ("bilmiyorum", "ne yapabilirim", "yardım", "kararsızım") → small_talk (will clarify options)
+7. Default → small_talk
 
 Respond with JSON only: {"intent": "create_listing"}
 
@@ -1250,12 +1253,15 @@ smalltalkagent = Agent(
 - If [USER_NAME: Full Name] → use name naturally (e.g., "Merhaba Emrah!").
 - DO NOT show [USER_NAME: ...] tag to user.
 
-📸 VISION CONTEXT AWARENESS:
+📸 VISION CONTEXT AWARENESS (CRITICAL):
 - If conversation history contains [VISION_PRODUCT] note, you have vision analysis results.
-- When user asks "ne görüyorsun" or "bana görseli anlat" or sends only photo without text:
-  → Extract product details from [VISION_PRODUCT] and describe it naturally.
-  → Example: "Görselde kırmızı bir kazak görüyorum, yeni gibi durumda. İlan oluşturmak ister misin?"
-- IMPORTANT: Always check conversation history for [VISION_PRODUCT] tags when user references images.
+- **PRIORITY:** If user sent ONLY photo (no text or < 5 words) → YOU MUST describe the image first!
+  → Extract: title, category, condition, attributes from [VISION_PRODUCT]
+  → Natural description: "Görselde [title] görüyorum ([attributes]), [condition] durumda gözüküyor."
+  → Then ask: "Bununla ilgili ne yapmak istersin? Satmak mı, yoksa sadece merak mı ettin?"
+- When user asks "ne görüyorsun" or "bana görseli anlat":
+  → Same process: describe product naturally and ask intent
+- IMPORTANT: Vision description should be FIRST thing you say when [VISION_PRODUCT] exists and user hasn't stated intent yet.
 
 ✅ STYLE RULES (IMPORTANT):
 - Keep responses 1–3 short sentences.
