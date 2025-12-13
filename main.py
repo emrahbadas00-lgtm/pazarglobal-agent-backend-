@@ -74,7 +74,6 @@ app.include_router(health_router)
 
 # Environment variables
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "https://pazarglobal-production.up.railway.app")
 
 
 class AgentRequest(BaseModel):
@@ -117,9 +116,9 @@ async def root():
         "status": "healthy",
         "service": "Pazarglobal Agent Backend",
         "version": "2.0.0",
-        "api_type": "Agents SDK + MCP",
+        "api_type": "OpenAI Agents SDK with Native Tools",
         "openai_configured": bool(OPENAI_API_KEY),
-        "mcp_server": MCP_SERVER_URL
+        "endpoints": ["/agent/run", "/web-chat", "/correct-speech", "/health"]
     }
 
 
@@ -452,12 +451,15 @@ async def correct_speech_options():
 @app.get("/health")
 async def health_check():
     """Detailed health check"""
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
+    
     return {
         "status": "healthy",
         "checks": {
             "openai_key": "configured" if OPENAI_API_KEY else "missing",
-            "mcp_server": MCP_SERVER_URL,
-            "endpoints": ["/agent/run", "/web-chat", "/correct-speech", "/health"]
+            "supabase": "configured" if (supabase_url and supabase_key) else "missing",
+            "tools": ["insert_listing", "search_listings", "update_listing", "delete_listing", "list_user_listings", "clean_price"]
         }
     }
 
