@@ -15,3 +15,6 @@ openai-guardrails>=0.1.0
 # Supabase client for database operations
 supabase>=2.0.0
 python-dotenv>=1.0.0
+
+# Production monitoring & security
+psutil>=5.9.0  # System resource monitoring

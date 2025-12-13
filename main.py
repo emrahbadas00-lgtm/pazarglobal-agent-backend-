@@ -1,6 +1,12 @@
 """
 Pazarglobal Agent Backend
 FastAPI wrapper for Agent Builder workflow using OpenAI Agents SDK
+
+Production Features:
+- Rate limiting & security middleware
+- Structured logging with sensitive data masking
+- Health checks & monitoring
+- User-friendly error handling
 """
 import os
 from fastapi import FastAPI, HTTPException
@@ -8,32 +14,63 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
-import logging
 import json
 import asyncio
 
 # Import workflow runner
 from workflow import run_workflow, WorkflowInput
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Production utilities
+from utils import logger, PerformanceLogger
+from utils.error_handling import register_error_handlers, create_error_response
+from middleware import SecurityMiddleware, rate_limiter
+from routes import health_router
 
-app = FastAPI(title="Pazarglobal Agent Backend")
+# Get environment
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+IS_PRODUCTION = ENVIRONMENT == "production"
 
-# CORS Configuration for Web Frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
+app = FastAPI(
+    title="Pazarglobal Agent Backend",
+    version="2.0.0",
+    description="AI-powered marketplace agent with multi-channel support"
+)
+
+# CORS Configuration
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:5173",  # Vite default
+    "https://*.vercel.app",
+    "https://*.railway.app",
+]
+
+# In production, be more restrictive
+if IS_PRODUCTION:
+    ALLOWED_ORIGINS = [
+        "https://pazarglobal.com",
+        "https://www.pazarglobal.com",
         "https://*.vercel.app",
         "https://*.railway.app",
-        "*"  # Allow all origins for development
-    ],
+    ]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS if IS_PRODUCTION else ["*"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
+    max_age=3600,  # Cache preflight for 1 hour
 )
+
+# Add security middleware
+app.add_middleware(SecurityMiddleware, rate_limiter=rate_limiter)
+
+# Register error handlers
+register_error_handlers(app)
+
+# Include health check routes
+app.include_router(health_router)
 
 # Environment variables
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
