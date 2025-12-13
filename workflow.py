@@ -1281,8 +1281,15 @@ smalltalkagent = Agent(
 
 ### MODE 1: GREETING
 User: "selam", "merhaba"
-Reply example:
-"Merhaba! İstersen kısaca sohbet edelim, istersen de ürün arayalım. Ne yapmak istersin?"
+Reply format (IMPORTANT - use exactly this structure):
+
+"Selam! [USER_NAME if available] 👋 PazarGlobal'e hoş geldiniz!
+
+🛒 Ürün satmak istiyorsanız: Satmak istediğiniz ürünün adını ve temel özelliklerini yazın.
+
+🔍 Ürün aramak istiyorsanız: Ne tür bir ürün aradığınızı söyleyin (örneğin: 'ikinci el telefon', 'bebek arabası', 'oyuncu koltuğu').
+
+Bugün PazarGlobal'de ne yapmak istersiniz, ürün mü satacaksınız yoksa bir şey mi arıyorsunuz?"
 
 ### MODE 2: CHATTERBOX / CASUAL CHAT
 User: "sohbet edelim", "muhabbet", "kafa dağıt", konu dışı kısa konuşma
@@ -1485,12 +1492,20 @@ async def run_workflow(workflow_input: WorkflowInput):
     Main agent workflow - routes user input to appropriate agents
     Uses OpenAI Agents SDK with MCP tools
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     with trace("PazarGlobal"):
         global CURRENT_REQUEST_USER_ID, CURRENT_REQUEST_USER_NAME, CURRENT_REQUEST_USER_PHONE
         CURRENT_REQUEST_USER_ID = workflow_input.user_id  # pyright: ignore[reportConstantRedefinition]
         CURRENT_REQUEST_USER_NAME = workflow_input.user_name  # pyright: ignore[reportConstantRedefinition]
         CURRENT_REQUEST_USER_PHONE = workflow_input.user_phone  # pyright: ignore[reportConstantRedefinition]
         workflow = workflow_input.model_dump()
+        
+        # DEBUG: Log media paths to diagnose webchat image upload issue
+        if workflow.get("media_paths"):
+            logger.info(f"🖼️  WORKFLOW media_paths received: {workflow.get('media_paths')}")
+            logger.info(f"🖼️  WORKFLOW media_type: {workflow.get('media_type')}")
         
         # Build conversation history from previous messages
         conversation_history: List[TResponseInputItem] = []
@@ -1550,12 +1565,16 @@ async def run_workflow(workflow_input: WorkflowInput):
                 media_note_parts.append(f"DRAFT_LISTING_ID={workflow['draft_listing_id']}")
             if workflow.get("media_paths"):
                 media_note_parts.append(f"MEDIA_PATHS={workflow['media_paths']}")
+            
+            media_note_text = f"[SYSTEM_MEDIA_NOTE] {' | '.join(media_note_parts)}"
+            logger.info(f"📝 Adding SYSTEM_MEDIA_NOTE to conversation: {media_note_text}")
+            
             conversation_history.append(cast(TResponseInputItem, {
                 "role": "assistant",
                 "content": [
                     {
                         "type": "output_text",
-                        "text": f"[SYSTEM_MEDIA_NOTE] {' | '.join(media_note_parts)}"
+                        "text": media_note_text
                     }
                 ]
             }))

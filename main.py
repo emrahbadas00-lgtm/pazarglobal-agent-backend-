@@ -190,6 +190,7 @@ async def web_chat_endpoint(request: AgentRequest):
     data: {"type":"done"}
     """
     logger.info(f"💬 Web chat request from user_id={request.user_id}: {request.message[:100]}")
+    logger.info(f"📸 Web chat media_paths={request.media_paths}, media_type={request.media_type}")
 
     # Resolve user profile from Supabase for personalization and authorization
     supabase_url = os.getenv("SUPABASE_URL")
