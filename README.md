@@ -978,15 +978,21 @@ pazarglobal-agent-backend/
 ├── workflow.py             # Agents + tools + workflow logic
 ├── requirements.txt        # Python dependencies
 ├── runtime.txt            # Python version (Railway için)
-├── tools/                 # Native function tools
+├── tools/                 # Native function tools for agents
 │   ├── clean_price.py
 │   ├── insert_listing.py
 │   ├── search_listings.py
 │   ├── update_listing.py
 │   ├── delete_listing.py
 │   ├── list_user_listings.py
-│   ├── suggest_category.py
-│   └── security_tools.py
+│   └── suggest_category.py
+├── middleware/            # Production middleware
+│   └── security.py        # Rate limiting, SQL/XSS protection
+├── utils/                 # Utility functions
+│   ├── logging_config.py  # Structured logging
+│   └── error_handling.py  # Turkish error messages
+├── routes/                # API routes
+│   └── health.py          # Health check endpoints
 ├── supabase/
 │   └── config.toml        # Supabase local config
 └── scripts/

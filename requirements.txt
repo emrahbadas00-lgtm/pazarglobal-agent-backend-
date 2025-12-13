@@ -18,3 +18,4 @@ python-dotenv>=1.0.0
 
 # Production monitoring & security
 psutil>=5.9.0  # System resource monitoring
+bcrypt>=4.1.0  # Password hashing for PIN security

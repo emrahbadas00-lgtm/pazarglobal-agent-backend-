@@ -5,12 +5,14 @@ from typing import Dict, Any, Optional
 from supabase import create_client, Client
 import os
 import bcrypt
-import secrets
-from datetime import datetime, timedelta
 
 # Supabase client
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")  # Service role key (bypasses RLS)
+
+if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+    raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 
