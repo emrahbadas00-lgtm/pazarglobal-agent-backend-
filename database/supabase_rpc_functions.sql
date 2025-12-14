@@ -3,6 +3,18 @@
 -- Bu fonksiyonlar Edge Function tarafından çağrılır
 -- ═══════════════════════════════════════════════════════════════════
 
+-- SHA-256 için gerekli
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- ───────────────────────────────────────────────────────────────────
+-- 0. Eski fonksiyonları sil (eğer varsa)
+-- ───────────────────────────────────────────────────────────────────
+
+DROP FUNCTION IF EXISTS verify_pin(TEXT, TEXT);
+DROP FUNCTION IF EXISTS register_user_pin(UUID, TEXT, TEXT);
+DROP FUNCTION IF EXISTS check_session(TEXT, UUID);
+DROP FUNCTION IF EXISTS reset_user_pin(UUID);
+
 -- ───────────────────────────────────────────────────────────────────
 -- 1. verify_pin - PIN doğrulama ve brute force koruması
 -- ───────────────────────────────────────────────────────────────────
@@ -79,7 +91,8 @@ BEGIN
     SET failed_attempts = 0,
         is_locked = false,
         blocked_until = NULL,
-        last_login = now()
+        last_login_at = now(),
+        last_login_ip = 'edge-function'
     WHERE phone = p_phone;
 
     -- Attempt log kaydet
@@ -156,10 +169,31 @@ RETURNS TABLE (
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
+DECLARE
+  v_user_id ALIAS FOR p_user_id;
+  v_phone   ALIAS FOR p_phone;
+  v_pin     ALIAS FOR p_pin_hash;
 BEGIN
+  -- Güvenlik: sadece giriş yapmış kullanıcı kendi kaydını güncelleyebilir
+  IF auth.uid() IS NULL OR auth.uid() <> v_user_id THEN
+    RETURN QUERY SELECT false, '❌ Yetkisiz işlem'::TEXT;
+    RETURN;
+  END IF;
+
+  -- Aynı telefon başka bir kullanıcıda kayıtlıysa temizle (unique constraint hatasını önler)
+  DELETE FROM user_security
+  WHERE phone = v_phone
+    AND user_id <> v_user_id;
+
+  -- profiles.phone unique olduğu için: aynı telefon başka profilde varsa temizle
+  UPDATE profiles
+  SET phone = NULL
+  WHERE phone = v_phone
+    AND id <> v_user_id;
+
   -- user_security tablosuna upsert
   INSERT INTO user_security (user_id, phone, pin_hash, failed_attempts, is_locked)
-  VALUES (p_user_id, p_phone, p_pin_hash, 0, false)
+  VALUES (v_user_id, v_phone, v_pin, 0, false)
   ON CONFLICT (user_id) 
   DO UPDATE SET 
     phone = EXCLUDED.phone,
@@ -171,8 +205,8 @@ BEGIN
 
   -- profiles tablosunda da phone güncelle
   UPDATE profiles
-  SET phone = p_phone
-  WHERE id = p_user_id;
+  SET phone = v_phone
+  WHERE id = v_user_id;
 
   RETURN QUERY SELECT true, '✅ PIN başarıyla kaydedildi'::TEXT;
 EXCEPTION WHEN OTHERS THEN
@@ -181,6 +215,45 @@ END;
 $$;
 
 COMMENT ON FUNCTION register_user_pin IS 'Yeni PIN kaydı veya güncelleme (frontend profil ayarlarından)';
+
+-- ───────────────────────────────────────────────────────────────────
+-- 2b. reset_user_pin - PIN sıfırlama (frontend'den çağrılır)
+-- ───────────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION reset_user_pin(
+  p_user_id UUID
+)
+RETURNS TABLE (
+  success BOOLEAN,
+  message TEXT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_user_id ALIAS FOR p_user_id;
+BEGIN
+  -- Güvenlik: sadece giriş yapmış kullanıcı kendi PIN'ini sıfırlayabilir
+  IF auth.uid() IS NULL OR auth.uid() <> v_user_id THEN
+    RETURN QUERY SELECT false, '❌ Yetkisiz işlem'::TEXT;
+    RETURN;
+  END IF;
+
+  DELETE FROM user_security
+  WHERE user_id = v_user_id;
+
+  -- Profildeki telefon bilgisini temizle (opsiyonel ama tutarlı)
+  UPDATE profiles
+  SET phone = NULL
+  WHERE id = v_user_id;
+
+  RETURN QUERY SELECT true, '✅ PIN sıfırlandı. Yeni PIN oluşturabilirsiniz.'::TEXT;
+EXCEPTION WHEN OTHERS THEN
+  RETURN QUERY SELECT false, ('❌ Hata: ' || SQLERRM)::TEXT;
+END;
+$$;
+
+COMMENT ON FUNCTION reset_user_pin IS 'Frontend profil ayarlarından çağrılır - WhatsApp PIN sıfırlama';
 
 -- ───────────────────────────────────────────────────────────────────
 -- 3. check_session - Session geçerliliği kontrolü (opsiyonel, edge function'da da yapılıyor)
@@ -228,16 +301,32 @@ CREATE TABLE IF NOT EXISTS user_security (
   user_id UUID NOT NULL UNIQUE REFERENCES profiles(id) ON DELETE CASCADE,
   phone TEXT NOT NULL UNIQUE,
   pin_hash TEXT NOT NULL,
+  session_token TEXT,
+  session_expires_at TIMESTAMP WITH TIME ZONE,
   failed_attempts INT DEFAULT 0,
-  is_locked BOOLEAN DEFAULT false,
   blocked_until TIMESTAMP WITH TIME ZONE,
-  last_login TIMESTAMP WITH TIME ZONE,
+  last_login_at TIMESTAMP WITH TIME ZONE,
+  last_login_ip TEXT,
+  device_fingerprint TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+  is_locked BOOLEAN DEFAULT false
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_security_phone ON user_security(phone);
 CREATE INDEX IF NOT EXISTS idx_user_security_user_id ON user_security(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_security_session_token ON user_security(session_token);
+CREATE INDEX IF NOT EXISTS idx_user_security_session_expires_at ON user_security(session_expires_at);
+
+-- update_updated_at_column() fonksiyonu varsa trigger kur (rerunnable)
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'update_updated_at_column') THEN
+    EXECUTE 'DROP TRIGGER IF EXISTS update_user_security_updated_at ON public.user_security';
+    EXECUTE 'CREATE TRIGGER update_user_security_updated_at BEFORE UPDATE ON public.user_security FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()';
+  END IF;
+END
+$$;
 
 COMMENT ON TABLE user_security IS 'WhatsApp PIN güvenlik ayarları';
 COMMENT ON COLUMN user_security.pin_hash IS 'SHA-256 hash (frontend tarafından oluşturuluyor)';
@@ -263,6 +352,10 @@ COMMENT ON TABLE pin_verification_attempts IS 'PIN doğrulama denemelerinin audi
 -- user_security için RLS
 ALTER TABLE user_security ENABLE ROW LEVEL SECURITY;
 
+-- Script tekrar çalıştırılabilir olsun diye mevcut policy'leri temizle
+DROP POLICY IF EXISTS "Users can read own security settings" ON user_security;
+DROP POLICY IF EXISTS "Users can update own security settings" ON user_security;
+
 CREATE POLICY "Users can read own security settings"
   ON user_security FOR SELECT
   USING (auth.uid() = user_id);
@@ -274,23 +367,18 @@ CREATE POLICY "Users can update own security settings"
 -- user_sessions için RLS
 ALTER TABLE user_sessions ENABLE ROW LEVEL SECURITY;
 
+-- Script tekrar çalıştırılabilir olsun diye mevcut policy'yi temizle
+DROP POLICY IF EXISTS "Users can read own sessions" ON user_sessions;
+
 CREATE POLICY "Users can read own sessions"
   ON user_sessions FOR SELECT
   USING (auth.uid() = user_id);
 
--- pin_verification_attempts için RLS (sadece admin görebilir)
+-- pin_verification_attempts için RLS (kimse okuyamaz, sadece sistem yazabilir)
 ALTER TABLE pin_verification_attempts ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Admin can read all attempts"
-  ON pin_verification_attempts FOR SELECT
-  TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM profiles 
-      WHERE id = auth.uid() 
-      AND role = 'admin'
-    )
-  );
+-- No read policy - audit logs are write-only for security
+-- To view logs, use Supabase Dashboard with service_role access
 
 -- ───────────────────────────────────────────────────────────────────
 -- 6. Test Queries (Manuel test için)
