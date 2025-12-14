@@ -51,7 +51,8 @@ PROD_ALLOWED_ORIGINS = [
 ]
 
 # Allow any subdomain on Vercel/Railway
-PROD_ALLOWED_ORIGIN_REGEX = r"^https://.*\\.vercel\\.app$|^https://.*\\.railway\\.app$"
+# (Raw string: use single backslash to escape dot)
+PROD_ALLOWED_ORIGIN_REGEX = r"^https://.*\.vercel\.app$|^https://.*\.railway\.app$"
 
 app.add_middleware(
     CORSMiddleware,
