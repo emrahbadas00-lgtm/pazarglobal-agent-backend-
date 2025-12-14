@@ -51,8 +51,11 @@ PROD_ALLOWED_ORIGINS = [
 ]
 
 # Allow any subdomain on Vercel/Railway
-# (Raw string: use single backslash to escape dot)
-PROD_ALLOWED_ORIGIN_REGEX = r"^https://.*\.vercel\.app$|^https://.*\.railway\.app$"
+# plus localhost for developer testing against production backend.
+PROD_ALLOWED_ORIGIN_REGEX = (
+    r"^https://.*\.vercel\.app$|^https://.*\.railway\.app$|"
+    r"^http://localhost(?::\d+)?$|^http://127\.0\.0\.1(?::\d+)?$"
+)
 
 app.add_middleware(
     CORSMiddleware,
