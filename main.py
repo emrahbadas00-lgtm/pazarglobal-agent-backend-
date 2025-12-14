@@ -37,26 +37,26 @@ app = FastAPI(
 )
 
 # CORS Configuration
-ALLOWED_ORIGINS = [
+# NOTE: Star/glob patterns like "https://*.vercel.app" are NOT supported in
+# CORSMiddleware allow_origins. Use allow_origin_regex for wildcard domains.
+DEV_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:3001",
     "http://localhost:5173",  # Vite default
-    "https://*.vercel.app",
-    "https://*.railway.app",
 ]
 
-# In production, be more restrictive
-if IS_PRODUCTION:
-    ALLOWED_ORIGINS = [
-        "https://pazarglobal.com",
-        "https://www.pazarglobal.com",
-        "https://*.vercel.app",
-        "https://*.railway.app",
-    ]
+PROD_ALLOWED_ORIGINS = [
+    "https://pazarglobal.com",
+    "https://www.pazarglobal.com",
+]
+
+# Allow any subdomain on Vercel/Railway
+PROD_ALLOWED_ORIGIN_REGEX = r"^https://.*\\.vercel\\.app$|^https://.*\\.railway\\.app$"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS if IS_PRODUCTION else ["*"],
+    allow_origins=PROD_ALLOWED_ORIGINS if IS_PRODUCTION else ["*"],
+    allow_origin_regex=PROD_ALLOWED_ORIGIN_REGEX if IS_PRODUCTION else None,
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
