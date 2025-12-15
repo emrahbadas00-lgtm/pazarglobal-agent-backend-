@@ -75,6 +75,7 @@ from tools.update_listing import update_listing as _update_listing
 from tools.delete_listing import delete_listing as _delete_listing
 from tools.list_user_listings import list_user_listings as _list_user_listings
 from tools.safety_log import log_image_safety_flag
+from tools.market_price_tool import get_market_price_estimate
 
 
 UpdateListingFn = Callable[..., Awaitable[Dict[str, Any]]]
@@ -282,6 +283,38 @@ async def list_user_listings_tool(
             "listings": [],
         }
     return await list_user_listings(user_id=resolved_user, limit=limit)
+
+
+@function_tool
+async def market_price_tool(
+    title: str,
+    category: str,
+    condition: str = "Az Kullanılmış",
+    description: str = "",
+    similarity_threshold: float = 0.5
+) -> Dict[str, Any]:
+    """
+    Cache'lenmiş GLOBAL piyasa verilerinden benzer ürünleri bulup fiyat tahmini yapar.
+    Kullanıcı fiyat önerisi istediğinde bu tool'u kullan.
+    Site ilanlarından da ayrıca fiyat al ve ikisini karşılaştır.
+    
+    Args:
+        title: Ürün başlığı (örn: 'iPhone 14 Pro Max 256GB')
+        category: Ürün kategorisi (örn: 'Elektronik', 'Otomotiv')
+        condition: Ürün durumu ('Sıfır', 'Az Kullanılmış', 'İyi Durumda', 'Orta Durumda')
+        description: Ürün açıklaması (opsiyonel, daha iyi eşleşme için)
+        similarity_threshold: Benzerlik eşiği (0-1), varsayılan 0.5
+    
+    Returns:
+        Global piyasa fiyatı ve benzer ürünler listesi
+    """
+    return get_market_price_estimate(
+        title=title,
+        category=category,
+        condition=condition,
+        description=description,
+        similarity_threshold=similarity_threshold
+    )
 
 
 # Shared client for guardrails
@@ -1211,9 +1244,38 @@ Ne yapmak istersiniz?"
 - Be helpful, suggest alternatives
 - Show partial matches if available
 
-🚫 NEVER use insert_listing_tool or clean_price_tool - only search_listings_tool!""",
+🚫 NEVER use insert_listing_tool or clean_price_tool - only search_listings_tool!
+
+💰 **PRICE SUGGESTION MODE (Fiyat Tahmini):**
+
+When user asks for price estimate: "bu ürünün fiyatı ne olmalı", "fiyat öner", "ne kadara satarım"
+
+1. **Extract product details** from conversation (title, category, condition, description)
+2. **Call BOTH tools in parallel:**
+   - `search_listings_tool` → Site ilanlarından fiyat ortalaması
+   - `market_price_tool` → Global piyasa verisi (cache'den)
+3. **Compare and present 2 prices:**
+
+**Format:**
+"💰 Fiyat Tahmini:
+
+📊 **SİTE ORTALMASI:** [avg_site_price] ₺
+   ([count] ilan ortalaması)
+   
+🌐 **GLOBAL PİYASA VERİSİ:** [global_price] ₺
+   (Güvenilirlik: [confidence]%)
+   Benzer ürünler: [similar_products]
+
+🎯 **ÖNERİM:** [recommendation] ₺
+   (İki fiyatın ortalaması veya global fiyat daha güvenilirse onu öner)"
+
+**Important:**
+- If search_listings returns 0 results → Only show global price
+- If market_price_tool returns error (no similar products) → Only show site average
+- Always explain which data source is more reliable
+- Use similarity_threshold=0.5 for market_price_tool""",
     model="gpt-5.1",
-    tools=[search_listings_tool],
+    tools=[search_listings_tool, market_price_tool],
     model_settings=ModelSettings(
         store=True,
         reasoning=Reasoning(
