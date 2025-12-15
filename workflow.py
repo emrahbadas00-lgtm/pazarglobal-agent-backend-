@@ -76,6 +76,15 @@ from tools.delete_listing import delete_listing as _delete_listing
 from tools.list_user_listings import list_user_listings as _list_user_listings
 from tools.safety_log import log_image_safety_flag
 from tools.market_price_tool import get_market_price_estimate
+from tools.wallet_tools import (
+    get_balance,
+    deduct_credits,
+    add_premium_to_listing,
+    get_transaction_history,
+    calculate_listing_cost,
+    renew_listing
+)
+from tools.admin_tools import admin_add_credits, admin_grant_premium
 
 
 UpdateListingFn = Callable[..., Awaitable[Dict[str, Any]]]
@@ -114,6 +123,141 @@ async def clean_price_tool(price_text: Optional[str] = None) -> Dict[str, Option
         Temizlenmiş fiyat değeri (int veya None)
     """
     return clean_price(price_text)
+
+
+@function_tool
+async def get_wallet_balance_tool(user_id: str) -> Dict[str, Any]:
+    """
+    Kullanıcının cüzdan bakiyesini sorgula.
+    
+    Args:
+        user_id: Kullanıcı UUID
+        
+    Returns:
+        Bakiye bilgisi (credits ve TRY cinsinden)
+    """
+    return get_balance(user_id)
+
+
+@function_tool
+async def calculate_listing_cost_tool(
+    use_ai_assistant: bool = False,
+    photo_count: int = 0,
+    use_ai_photos: bool = False,
+    use_price_suggestion: bool = False,
+    use_description_expansion: bool = False
+) -> Dict[str, Any]:
+    """
+    İlan yayınlama maliyetini hesapla (kullanıcıya göster, henüz kesme).
+    
+    Args:
+        use_ai_assistant: AI asistan kullanıldı mı
+        photo_count: Fotoğraf sayısı
+        use_ai_photos: AI fotoğraf analizi kullanıldı mı
+        use_price_suggestion: AI fiyat önerisi kullanıldı mı
+        use_description_expansion: AI açıklama geliştirme kullanıldı mı
+        
+    Returns:
+        Maliyet detayı (breakdown, total_credits, total_try)
+    """
+    return calculate_listing_cost(
+        use_ai_assistant=use_ai_assistant,
+        photo_count=photo_count,
+        use_ai_photos=use_ai_photos,
+        use_price_suggestion=use_price_suggestion,
+        use_description_expansion=use_description_expansion
+    )
+
+
+@function_tool
+async def deduct_listing_credits_tool(
+    user_id: str,
+    amount_credits: int,
+    listing_id: str
+) -> Dict[str, Any]:
+    """
+    İlan yayınlandığında kredi kes.
+    
+    Args:
+        user_id: Kullanıcı UUID
+        amount_credits: Kesilecek kredi miktarı
+        listing_id: İlan UUID (referans)
+        
+    Returns:
+        İşlem sonucu ve yeni bakiye
+    """
+    return deduct_credits(
+        user_id=user_id,
+        amount_credits=amount_credits,
+        action="listing_publish",
+        reference=listing_id
+    )
+
+
+@function_tool
+async def add_premium_badge_tool(
+    user_id: str,
+    listing_id: str,
+    badge_type: str
+) -> Dict[str, Any]:
+    """
+    İlana premium rozet ekle (Gold/Platinum/Diamond).
+    
+    Args:
+        user_id: Kullanıcı UUID (kredi kesilecek)
+        listing_id: İlan UUID
+        badge_type: Rozet tipi (gold, platinum, diamond)
+        
+    Returns:
+        İşlem sonucu, rozet emoji, süre, kesilen kredi
+    """
+    return add_premium_to_listing(
+        user_id=user_id,
+        listing_id=listing_id,
+        badge_type=badge_type
+    )
+
+
+@function_tool
+async def renew_listing_tool(
+    user_id: str,
+    listing_id: str
+) -> Dict[str, Any]:
+    """
+    İlanı 30 gün daha uzat (5 kredi kesilir).
+    
+    Args:
+        user_id: Kullanıcı UUID
+        listing_id: İlan UUID
+        
+    Returns:
+        İşlem sonucu, yeni bitiş tarihi
+    """
+    return renew_listing(
+        user_id=user_id,
+        listing_id=listing_id
+    )
+
+
+@function_tool
+async def get_transaction_history_tool(
+    user_id: str,
+    limit: int = 20
+) -> Dict[str, Any]:
+    """
+    Kullanıcının işlem geçmişini getir.
+    
+    Args:
+        user_id: Kullanıcı UUID
+        limit: Maksimum işlem sayısı
+        
+    Returns:
+        İşlem listesi
+    """
+    return get_transaction_history(
+        user_id=user_id,
+        limit=limit
+    )
 
 
 
@@ -804,9 +948,17 @@ insert_listing_tool(
 → Add {"type": "general"} before insert
 
 🚫 DO NOT ask user again - auto-fix and insert!
-🚫 Extract listing ID from result[0]['id'], NOT user_id!""",
+🚫 Extract listing ID from result[0]['id'], NOT user_id!
+
+💰 CREDIT SYSTEM:
+- Base listing: 25kr (₺5) - 30 days active
+- Calculate cost before publish: Use calculate_listing_cost_tool
+- Deduct credits after insert: Use deduct_listing_credits_tool
+- Show user: "İlanınız yayınlanıyor, 25 kredi (₺5) kesilecek, onaylıyor musun?"
+- After deduct: "İlanınız yayınlandı! 25 kredi kesildi, yeni bakiye: X kredi"
+""",
     model="gpt-5.1",
-    tools=[insert_listing_tool],
+    tools=[insert_listing_tool, calculate_listing_cost_tool, deduct_listing_credits_tool, get_wallet_balance_tool],
     model_settings=ModelSettings(
         store=True,
         reasoning=Reasoning(
@@ -1356,16 +1508,24 @@ User: "vites tipini otomatik yap"
 - Always preserve existing metadata when updating
 - Only update the specific metadata fields user mentions
 - Include metadata parameter when calling update_listing_tool if any product details changed
- - Include images parameter when photos change (send full list)
+- Include images parameter when photos change (send full list)
+
+💰 PREMIUM & RENEWAL:
+- Add premium badge: Use add_premium_badge_tool (gold/platinum/diamond)
+- Renew listing: Use renew_listing_tool (+30 days, 5kr)
+- Show costs: Gold ₺10, Platinum ₺18, Diamond ₺30
 
 Tools available:
 - list_user_listings_tool
 - update_listing_tool
 - clean_price_tool
+- add_premium_badge_tool
+- renew_listing_tool
+- get_wallet_balance_tool
 
 NEVER use insert_listing_tool!""",
     model="gpt-5.1",
-    tools=[update_listing_tool, list_user_listings_tool, clean_price_tool],
+    tools=[update_listing_tool, list_user_listings_tool, clean_price_tool, add_premium_badge_tool, renew_listing_tool, get_wallet_balance_tool],
     model_settings=ModelSettings(
         store=True,
         reasoning=Reasoning(
