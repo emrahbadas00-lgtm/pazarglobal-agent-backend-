@@ -77,7 +77,7 @@ from tools.list_user_listings import list_user_listings as _list_user_listings
 from tools.safety_log import log_image_safety_flag
 from tools.market_price_tool import get_market_price_estimate
 from tools.wallet_tools import (
-    get_balance,
+    get_wallet_balance,
     deduct_credits,
     add_premium_to_listing,
     get_transaction_history,
@@ -136,7 +136,7 @@ async def get_wallet_balance_tool(user_id: str) -> Dict[str, Any]:
     Returns:
         Bakiye bilgisi (credits ve TRY cinsinden)
     """
-    return get_balance(user_id)
+    return get_wallet_balance(user_id)
 
 
 @function_tool
