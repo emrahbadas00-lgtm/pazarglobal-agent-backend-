@@ -672,43 +672,48 @@ class VisionSafetyProductSchema(BaseModel):
 
 
 vision_safety_product_agent = Agent(
-    name="VisionSafetyProductAgent",
-    instructions="""
-You are a Vision Safety & Product Agent. MAXIMIZE extraction to reduce user questions.
+        name="VisionSafetyProductAgent",
+        instructions="""
+You are a Vision Safety & Product Agent. MAXIMIZE extraction, but avoid false positives for normal photos.
 
-PRIMARY: Run safety first. If any illegal/unsafe suspicion → flag and stop. Do NOT give product info when unsafe.
+PRIMARY: Run safety first. Block ONLY when clearly illegal/unsafe: child exploitation, sexual explicit content, extreme violence/abuse, hate/terror symbols, weapons/ammunition, drugs/narcotics, stolen/tampered serial numbers, fake IDs/official documents, animal cruelty.
 
-Illegal / unsafe (examples): child exploitation, sexual explicit content, extreme violence/abuse, hate/terror symbols, weapons/ammunition, drugs/narcotics, stolen/tampered serial numbers, fake IDs/official documents, animal cruelty. Mayo/bikini/underwear/sportswear are NOT illegal by themselves; avoid false positives.
+🚫 What NOT to block (mark safe=true, allow_listing=true unless illegal context):
+- Normal people/portraits/selfies, group photos, everyday scenes
+- Clothing (including mayo/bikini/underwear/sportswear) when non-sexual
+- Cartoons/illustrations/3D renders/animated characters
+- Product photos that merely contain faces or backgrounds
+- Blurry/low-detail images without explicit harm
 
 Steps:
-1) Safety check (mandatory). If unsure, choose unsafe. If unsafe → allow_listing=false and product=null.
+1) Safety check (mandatory). If you see a prohibited category above → safe=false, allow_listing=false, product=null. If uncertain but no clear prohibited content → safe=true, allow_listing=true (DO NOT block for "identity" alone).
 2) If safe → MAXIMUM extraction from photo:
-   - **Brand**: Extract visible brand name/logo (e.g., "BMW", "Apple", "Samsung", "Nike")
-   - **Type**: Classify product type (e.g., "sedan", "SUV", "smartphone", "laptop", "t-shirt", "cologne")
-   - **Color**: Primary visible color (e.g., "siyah", "beyaz", "gri", "mavi", "kırmızı")
-   - **Condition hints**: Visual clues (e.g., "yeni görünümlü", "çizikler var", "temiz", "yıpranmış")
-   - **Model**: ⚠️ NEVER guess specific model (e.g., DON'T say "iPhone 13" if unclear) - only if clearly visible (text/logo on product)
-   - **Category**: Auto-assign from visible product
-   - **Quantity**: Default 1
+     - **Brand**: Extract visible brand name/logo (e.g., "BMW", "Apple", "Samsung", "Nike")
+     - **Type**: Classify product type (e.g., "sedan", "SUV", "smartphone", "laptop", "t-shirt", "cologne")
+     - **Color**: Primary visible color (e.g., "siyah", "beyaz", "gri", "mavi", "kırmızı")
+     - **Condition hints**: Visual clues (e.g., "yeni görünümlü", "çizikler var", "temiz", "yıpranmış")
+     - **Model**: ⚠️ NEVER guess specific model (e.g., DON'T say "iPhone 13" if unclear) - only if clearly visible (text/logo on product)
+     - **Category**: Auto-assign from visible product
+     - **Quantity**: Default 1
 
 Output STRICT JSON:
 {
-  "safe": true | false,
-  "flag_type": "none | weapon | drugs | violence | abuse | terrorism | stolen | document | sexual | hate | unknown",
-  "confidence": "high | medium | low",
-  "message": "short explanation",
-  "product": {
-    "title": "string or null",
-    "category": "string or null",
-    "brand": "string or null",
-    "type": "string or null",
-    "color": "string or null",
-    "condition_hint": "string or null",
-    "attributes": ["..."],
-    "condition": "new | used | unknown",
-    "quantity": 1
-  },
-  "allow_listing": true | false
+    "safe": true | false,
+    "flag_type": "none | weapon | drugs | violence | abuse | terrorism | stolen | document | sexual | hate | unknown",
+    "confidence": "high | medium | low",
+    "message": "short explanation",
+    "product": {
+        "title": "string or null",
+        "category": "string or null",
+        "brand": "string or null",
+        "type": "string or null",
+        "color": "string or null",
+        "condition_hint": "string or null",
+        "attributes": ["..."],
+        "condition": "new | used | unknown",
+        "quantity": 1
+    },
+    "allow_listing": true | false
 }
 
 Examples:
@@ -716,13 +721,13 @@ Examples:
 - Phone photo: brand="Apple", type="smartphone", color="beyaz", condition_hint="ekran koruyuculu"
 - Cologne photo: brand="unknown", type="cologne", color="cam şişe", condition_hint="yeni görünümlü"
 
-Rules: Never generate images. Never speculate model beyond what is visible. Safety overrides functionality. When unsafe, product fields must be null.
+Rules: Never generate images. Never speculate model beyond what is visible. When safe=true, allow_listing SHOULD BE true. Only set allow_listing=false when you set safe=false for a prohibited category.
 """,
-    model="gpt-4o-mini",  # vision-capable lightweight
-    output_type=AgentOutputSchema(VisionSafetyProductSchema, strict_json_schema=False),
-    model_settings=ModelSettings(
-        store=False
-    )
+        model="gpt-4o-mini",  # vision-capable lightweight
+        output_type=AgentOutputSchema(VisionSafetyProductSchema, strict_json_schema=False),
+        model_settings=ModelSettings(
+                store=False
+        )
 )
 
 
@@ -1273,7 +1278,7 @@ Your response: "Otomotiv kategorisinde toplam 6 ilan bulundu." ← Use 'total' (
 **Important formatting rules for compact view:**
 - **ALWAYS show owner**: 👤 [user_name or user_phone]
 - If user_name exists: 👤 [user_name]
-- If user_name missing: 👤 +90***1234 (masked phone)
+- If user_name missing: show the actual owner_phone (do NOT mask or invent; if phone missing say "Telefon yok")
 - Only show: number, title, price, location, **owner**
 - Keep VERY short (total < 800 chars for 5 listings)
    💰 [price] TL | 📍 [location]
@@ -1339,6 +1344,8 @@ Kategori: [category]
 [IF available: İlan ID: [id]]
 [IF available: İlan sahibi: [user_name OR owner_name] | Telefon: [user_phone OR owner_phone]]
 [IF description exists and is short: Show first 100 chars only]
+
+Phone rule: Use the exact phone provided in listing (owner_phone/user_phone). Do NOT mask or fabricate. If phone is missing, say "Telefon yok" instead of masking.
 
 Fotoğraflar:
 [EACH URL FROM signed_images ARRAY ON SEPARATE LINE - MAX 3 URLs]
@@ -2004,23 +2011,33 @@ async def run_workflow(workflow_input: WorkflowInput):
                     })
                     continue
 
-                if not vision_result.get("safe") or not vision_result.get("allow_listing", False):
+                safe_flag = bool(vision_result.get("safe"))
+                flag_type = (vision_result.get("flag_type") or "unknown")
+                allow_listing_flag = vision_result.get("allow_listing")
+                if allow_listing_flag is None:
+                    allow_listing_flag = safe_flag
+                # Prevent false positives: if safe and no explicit flag, keep allow_listing true
+                if safe_flag and (flag_type in ("none", "unknown", "")) and allow_listing_flag is False:
+                    allow_listing_flag = True
+
+                if (not safe_flag) or (not allow_listing_flag):
                     # Log flag for admin review (no auto-ban)
                     log_image_safety_flag(
                         user_id=workflow.get("user_id"),
                         image_url=str(media_path),
-                        flag_type=vision_result.get("flag_type", "unknown"),
+                        flag_type=flag_type,
                         confidence=vision_result.get("confidence", "low"),
                         message=vision_result.get("message", "unsafe"),
                     )
                     blocked_media_paths.append({
                         "path": str(media_path),
                         "reason": vision_result.get("message", "unsafe"),
-                        "flag_type": vision_result.get("flag_type", "unknown"),
+                        "flag_type": flag_type,
                         "confidence": vision_result.get("confidence", "low"),
                     })
                     continue
 
+                vision_result["allow_listing"] = allow_listing_flag
                 safe_media_paths.append(str(media_path))
                 if first_safe_vision is None:
                     first_safe_vision = vision_result
