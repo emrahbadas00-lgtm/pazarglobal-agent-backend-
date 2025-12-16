@@ -625,10 +625,10 @@ Respond ONLY with valid JSON following the schema.
 
 **Keywords:**
 - create_listing: "satıyorum", "satmak", "satayım", "-um var", "ilan vermek"
-- update_listing: "değiştir", "güncelle", "fiyat ... yap", "düzenle", "yazım yanlış", "düzelt", **"ilanlarım", "ilanlarımı göster", "ilanlarımı görmek", "bana ait ilanlar", "tüm ilanları göster", "bu ürünler bana ait", "bana ait değilmi", "kime ait", "sahibi kim", "benim ilanlar"** (for viewing/managing existing listings + ownership verification)
+- update_listing: "değiştir", "güncelle", "fiyat ... yap", "düzenle", "yazım yanlış", "düzelt", **"ilanlarım", "ilanlarımı göster", "ilanlarımı görmek", "bana ait ilanlar", "benim ilanlar"** (ONLY user's own listings)
 - delete_listing: "sil", "kaldır", "ilanımı iptal"
 - publish_listing: "onayla", "yayınla" (only if draft exists)
-- search_product: "almak", "arıyorum", "var mı", "bul", "uygun", "satın al"
+- search_product: "almak", "arıyorum", "var mı", "bul", "uygun", "satın al", **"tüm ilanlar", "tüm ilanları göster", "bütün ilanlar", "sitedeki ilanlar", "kime ait"** (ALL listings, not just user's)
 - wallet_query: "bakiye", "bakiyem", "kredi", "kredim", "param", "cüzdan", "işlemlerim", "harcamalarım", "geçmiş"
 - small_talk: "merhaba", "selam", "teşekkür", "sohbet", "muhabbet", "kafa dağıt", "konuşalım", "gevez", "lafla", "ne görüyorsun"
 - cancel: "iptal", "vazgeç", "sıfırla"
