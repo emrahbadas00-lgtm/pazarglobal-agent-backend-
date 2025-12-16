@@ -475,6 +475,17 @@ Ana workflow endpoint. Tüm agent işlemlerini bu endpoint üzerinden yapın.
   "media_paths": ["optional-list"],
   "media_type": "optional-string",
   "draft_listing_id": "optional-uuid",
+  "auth_context": {
+    "user_id": "uuid-string",
+    "phone": "optional-string",
+    "authenticated": true,
+    "session_expires_at": "2025-01-15T12:00:00Z"
+  },
+  "conversation_state": {
+    "mode": "web|whatsapp",
+    "active_listing_id": "optional-uuid",
+    "last_intent": "create_listing|search_listing|update_listing|delete_listing|view_my_listings"
+  },
   "session_token": "optional-string",
   "user_context": {
     "name": "optional-string"
@@ -501,6 +512,17 @@ curl -X POST http://localhost:8000/agent/run \
     "conversation_history": []
   }'
 ```
+
+**Auth & Session Model:**
+- `auth_context` zorunlu alanlar: `user_id` (Supabase auth.uid), `authenticated` (bool). `phone` opsiyonel ama WhatsApp için önerilir. `session_expires_at` ISO8601 (Supabase session expiry).
+- `conversation_state` global state taşıyıcısıdır: `mode` (`web` veya `whatsapp`), `active_listing_id` (opsiyonel UUID), `last_intent` (router çıktısı). Köprü katmanı (Web Chat / WhatsApp Bridge) her istekte gönderir.
+- Router intent + `conversation_state.last_intent` backend'de güncellenir; agent'lar sadece iş yapar, yetki kontrolü backend seviyesinde.
+- ⚠️ Aktif session varken sistem asla “Hoş geldin / Giriş yap” mesajı üretmez.
+- Korunan intentler (`update_listing`, `delete_listing`) `authenticated=true` ve `auth_context.user_id` olmadan çalışmaz; backend owner_id doğrular.
+- Supabase RLS için owner-only politikalar [pazarglobal-agent-backend/RLS_POLICY_LISTINGS.sql](pazarglobal-agent-backend/RLS_POLICY_LISTINGS.sql) dosyasında. Uygulamak için: Supabase SQL editor → dosyayı çalıştır → ilgili tabloda RLS enable.
+- Web Chat: Supabase session'dan `auth_context` üret, `conversation_state.mode="web"` gönder.
+- WhatsApp Bridge: Telefon → user_id eşlemesini yaptıktan sonra `auth_context.authenticated=true` + `phone` gönder, `conversation_state.mode="whatsapp"` ilet.
+- VisionSafetyProductAgent yalnızca `media_paths` varsa çalışır; metin-only mesajlarda devre dışı kalır.
 
 ---
 

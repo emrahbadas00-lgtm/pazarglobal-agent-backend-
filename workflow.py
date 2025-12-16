@@ -58,6 +58,8 @@ TODO: Implement after Phase 3 (Listing Management) is complete.
 """
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownArgumentType=false, reportMissingParameterType=false, reportMissingTypeArgument=false
 import os
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from agents import Agent, AgentOutputSchema, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
 from agents.tool import function_tool
 from openai import AsyncOpenAI
@@ -110,6 +112,64 @@ def _resolve_public_image_url(path: str) -> str:
         return path
     return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_PUBLIC_BUCKET}/{path.lstrip('/')}"
 
+
+@dataclass
+class WorkflowContext:
+    """İstek başına oturum ve kimlik bilgilerini taşır."""
+    user_id: Optional[str] = None
+    user_name: Optional[str] = None
+    user_phone: Optional[str] = None
+    auth_context: Dict[str, Any] = field(default_factory=dict)
+    conversation_state: Dict[str, Any] = field(default_factory=dict)
+
+
+WORKFLOW_CONTEXT: ContextVar[Optional[WorkflowContext]] = ContextVar("WORKFLOW_CONTEXT", default=None)
+
+
+def get_workflow_context() -> Optional[WorkflowContext]:
+    return WORKFLOW_CONTEXT.get()
+
+
+def resolve_user_id(explicit_user_id: Optional[str] = None) -> Optional[str]:
+    if explicit_user_id:
+        return explicit_user_id
+    ctx = get_workflow_context()
+    if not ctx:
+        return None
+    auth_ctx = ctx.auth_context or {}
+    if auth_ctx.get("user_id"):
+        return auth_ctx.get("user_id")
+    return ctx.user_id
+
+
+def resolve_user_phone(explicit_phone: Optional[str] = None) -> Optional[str]:
+    if explicit_phone:
+        return explicit_phone
+    ctx = get_workflow_context()
+    if not ctx:
+        return None
+    auth_ctx = ctx.auth_context or {}
+    if auth_ctx.get("phone"):
+        return auth_ctx.get("phone")
+    return ctx.user_phone
+
+
+def resolve_user_name(explicit_name: Optional[str] = None) -> Optional[str]:
+    if explicit_name:
+        return explicit_name
+    ctx = get_workflow_context()
+    return ctx.user_name if ctx else None
+
+
+def resolve_auth_context() -> Dict[str, Any]:
+    ctx = get_workflow_context()
+    return ctx.auth_context if ctx and ctx.auth_context else {}
+
+
+def resolve_conversation_state() -> Dict[str, Any]:
+    ctx = get_workflow_context()
+    return ctx.conversation_state if ctx and ctx.conversation_state else {}
+
 # Native function tool definitions (plain Python async functions)
 @function_tool
 async def clean_price_tool(price_text: Optional[str] = None) -> Dict[str, Optional[int]]:
@@ -136,7 +196,7 @@ async def get_wallet_balance_tool(user_id: Optional[str] = None) -> Dict[str, An
     Returns:
         Bakiye bilgisi (credits ve TRY cinsinden)
     """
-    resolved_user_id = CURRENT_REQUEST_USER_ID or user_id
+    resolved_user_id = resolve_user_id(user_id)
     if not resolved_user_id:
         return {"success": False, "error": "Missing user_id (no authenticated user in workflow context)"}
     return get_wallet_balance(resolved_user_id)
@@ -189,7 +249,7 @@ async def deduct_listing_credits_tool(
     Returns:
         İşlem sonucu ve yeni bakiye
     """
-    resolved_user_id = CURRENT_REQUEST_USER_ID or user_id
+    resolved_user_id = resolve_user_id(user_id)
     if not resolved_user_id:
         return {"success": False, "error": "Missing user_id (no authenticated user in workflow context)"}
     return deduct_credits(
@@ -217,7 +277,7 @@ async def add_premium_badge_tool(
     Returns:
         İşlem sonucu, rozet emoji, süre, kesilen kredi
     """
-    resolved_user_id = CURRENT_REQUEST_USER_ID or user_id
+    resolved_user_id = resolve_user_id(user_id)
     if not resolved_user_id:
         return {"success": False, "error": "Missing user_id (no authenticated user in workflow context)"}
     return add_premium_to_listing(
@@ -242,7 +302,7 @@ async def renew_listing_tool(
     Returns:
         İşlem sonucu, yeni bitiş tarihi
     """
-    resolved_user_id = CURRENT_REQUEST_USER_ID or user_id
+    resolved_user_id = resolve_user_id(user_id)
     if not resolved_user_id:
         return {"success": False, "error": "Missing user_id (no authenticated user in workflow context)"}
     return renew_listing(
@@ -266,7 +326,7 @@ async def get_transaction_history_tool(
     Returns:
         İşlem listesi
     """
-    resolved_user_id = CURRENT_REQUEST_USER_ID or user_id
+    resolved_user_id = resolve_user_id(user_id)
     if not resolved_user_id:
         return {"success": False, "error": "Missing user_id (no authenticated user in workflow context)"}
     return get_transaction_history(
@@ -306,8 +366,9 @@ async def insert_listing_tool(
         images: Supabase storage path list
         listing_id: Opsiyonel, önceden belirlenmiş UUID (mediayla senkron)
     """
-    # Use the authenticated user's ID from workflow context
-    resolved_user_id = CURRENT_REQUEST_USER_ID or user_id
+    resolved_user_id = resolve_user_id(user_id)
+    resolved_user_name = resolve_user_name()
+    resolved_user_phone = resolve_user_phone()
     
     return await insert_listing(
         title=title,
@@ -321,8 +382,8 @@ async def insert_listing_tool(
         metadata=metadata,
         images=images,
         listing_id=listing_id,
-        user_name=CURRENT_REQUEST_USER_NAME,  # Pass user name
-        user_phone=CURRENT_REQUEST_USER_PHONE,  # Pass user phone
+        user_name=resolved_user_name,
+        user_phone=resolved_user_phone,
     )
 
 
@@ -383,7 +444,8 @@ async def update_listing_tool(
         title, price, condition, category, description, location, stock, metadata: Güncellenecek alanlar
         images: Güncel fotoğraf path listesi (tam liste gönderilir)
     """
-    if not CURRENT_REQUEST_USER_ID:
+    resolved_user_id = resolve_user_id()
+    if not resolved_user_id:
         return {
             "success": False,
             "error": "not_authenticated",
@@ -391,7 +453,7 @@ async def update_listing_tool(
         }
     return await update_listing(
         listing_id=listing_id,
-        user_id=CURRENT_REQUEST_USER_ID,
+        user_id=resolved_user_id,
         title=title,
         price=price,
         condition=condition,
@@ -412,13 +474,14 @@ async def delete_listing_tool(listing_id: str) -> Dict[str, Any]:
     Args:
         listing_id: Silinecek ilan ID (zorunlu)
     """
-    if not CURRENT_REQUEST_USER_ID:
+    resolved_user_id = resolve_user_id()
+    if not resolved_user_id:
         return {
             "success": False,
             "error": "not_authenticated",
             "message": "User not authenticated",
         }
-    return await delete_listing(listing_id=listing_id, user_id=CURRENT_REQUEST_USER_ID)
+    return await delete_listing(listing_id=listing_id, user_id=resolved_user_id)
 
 
 @function_tool
@@ -433,7 +496,7 @@ async def list_user_listings_tool(
         user_id: Kullanıcı UUID (zorunlu)
         limit: Sonuç sayısı limiti
     """
-    resolved_user = user_id or CURRENT_REQUEST_USER_ID
+    resolved_user = resolve_user_id(user_id)
     if not resolved_user:
         return {
             "success": False,
@@ -1819,13 +1882,6 @@ class WorkflowInput(BaseModel):
     conversation_state: Optional[Dict[str, Any]] = None  # {mode, active_listing_id, last_intent}
 
 
-# Per-request context (set in run_workflow)
-CURRENT_REQUEST_USER_ID: Optional[str] = None
-CURRENT_REQUEST_USER_NAME: Optional[str] = None
-CURRENT_REQUEST_USER_PHONE: Optional[str] = None
-CURRENT_REQUEST_AUTH_CONTEXT: Optional[Dict[str, Any]] = None
-CURRENT_CONVERSATION_STATE: Optional[Dict[str, Any]] = None
-
 # Session store for safe media paths (persists across messages within a session)
 # Format: {user_id: [safe_path1, safe_path2, ...]}
 # TODO: Replace with Redis/DB for production; this is in-memory for now
@@ -1842,12 +1898,14 @@ async def run_workflow(workflow_input: WorkflowInput):
     logger = logging.getLogger(__name__)
     
     with trace("PazarGlobal"):
-        global CURRENT_REQUEST_USER_ID, CURRENT_REQUEST_USER_NAME, CURRENT_REQUEST_USER_PHONE, CURRENT_REQUEST_AUTH_CONTEXT, CURRENT_CONVERSATION_STATE
-        CURRENT_REQUEST_USER_ID = workflow_input.user_id  # pyright: ignore[reportConstantRedefinition]
-        CURRENT_REQUEST_USER_NAME = workflow_input.user_name  # pyright: ignore[reportConstantRedefinition]
-        CURRENT_REQUEST_USER_PHONE = workflow_input.user_phone  # pyright: ignore[reportConstantRedefinition]
-        CURRENT_REQUEST_AUTH_CONTEXT = workflow_input.auth_context  # pyright: ignore[reportConstantRedefinition]
-        CURRENT_CONVERSATION_STATE = workflow_input.conversation_state  # pyright: ignore[reportConstantRedefinition]
+        ctx = WorkflowContext(
+            user_id=workflow_input.user_id,
+            user_name=workflow_input.user_name,
+            user_phone=workflow_input.user_phone,
+            auth_context=workflow_input.auth_context or {},
+            conversation_state=workflow_input.conversation_state or {},
+        )
+        WORKFLOW_CONTEXT.set(ctx)
         workflow = workflow_input.model_dump()
         
         # DEBUG: Log media paths to diagnose webchat image upload issue
@@ -1919,7 +1977,7 @@ async def run_workflow(workflow_input: WorkflowInput):
         
         # Server-side pending safe media: if this user has safe images from previous message,
         # inject them as SYSTEM_MEDIA_NOTE so agents can use them (WhatsApp/WebChat both benefit)
-        user_id_key = workflow_input.user_id or "anonymous"
+        user_id_key = resolve_user_id(workflow_input.user_id) or workflow_input.user_id or "anonymous"
         pending_safe_media = USER_SAFE_MEDIA_STORE.get(user_id_key, [])
         has_explicit_media = bool(workflow.get("media_paths"))
         
@@ -2041,6 +2099,7 @@ async def run_workflow(workflow_input: WorkflowInput):
         blocked_media_paths: List[Dict[str, Any]] = []
         first_safe_vision: Optional[Dict[str, Any]] = None
 
+        # VisionSafetyProductAgent only runs when explicit media is present
         if media_paths:
             for media_path in media_paths:
                 image_url = _resolve_public_image_url(str(media_path))
@@ -2191,8 +2250,32 @@ async def run_workflow(workflow_input: WorkflowInput):
             
             intent = router_agent_intent_classifier_result["output_parsed"]["intent"]
 
+        # Persist last intent in conversation_state and expose to downstream agents
+        state_for_update = resolve_conversation_state()
+        if isinstance(state_for_update, dict):
+            state_for_update["last_intent"] = intent
+            state_parts: List[str] = []
+            if state_for_update.get("mode"):
+                state_parts.append(f"MODE={state_for_update.get('mode')}")
+            if state_for_update.get("active_listing_id"):
+                state_parts.append(f"ACTIVE_LISTING_ID={state_for_update.get('active_listing_id')}")
+            if state_for_update.get("last_intent"):
+                state_parts.append(f"LAST_INTENT={state_for_update.get('last_intent')}")
+            if state_parts:
+                conversation_history.append(cast(TResponseInputItem, {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "[CONVERSATION_STATE] " + " | ".join(state_parts)
+                        }
+                    ]
+                }))
+
         # Authentication gate for protected intents
-        is_authenticated = bool(CURRENT_REQUEST_AUTH_CONTEXT and CURRENT_REQUEST_AUTH_CONTEXT.get("authenticated") and CURRENT_REQUEST_USER_ID)
+        auth_ctx = resolve_auth_context()
+        resolved_user_id = resolve_user_id()
+        is_authenticated = bool(auth_ctx.get("authenticated") and resolved_user_id)
         protected_intents = {"update_listing", "delete_listing"}
         if intent in protected_intents and not is_authenticated:
             return {
