@@ -15,10 +15,23 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 def normalize_category_with_metadata(category: Optional[str], metadata: Optional[Dict[str, Any]]) -> Optional[str]:
     """Force category to align with detected metadata type for consistency."""
     meta_type = (metadata or {}).get("type") if isinstance(metadata, dict) else None
-    if meta_type == "vehicle":
-        return "Otomotiv"
-    if meta_type == "property":
-        return "Emlak"
+    
+    # Map metadata types to categories
+    type_to_category = {
+        "vehicle": "Otomotiv",
+        "property": "Emlak",
+        "electronics": "Elektronik",
+        "phone": "Elektronik",
+        "computer": "Elektronik",
+        "appliance": "Ev & Yaşam",
+        "furniture": "Ev & Yaşam",
+        "clothing": "Moda & Giyim",
+        "general": "Genel"
+    }
+    
+    if meta_type and meta_type in type_to_category:
+        return type_to_category[meta_type]
+    
     return category
 
 

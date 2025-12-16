@@ -10,10 +10,23 @@ from .suggest_category import suggest_category
 def normalize_category_with_metadata(category: Optional[str], metadata: Optional[dict]) -> Optional[str]:
     """Ensure category matches metadata type (e.g., vehicle => Otomotiv)."""
     meta_type = (metadata or {}).get("type") if isinstance(metadata, dict) else None
-    if meta_type == "vehicle":
-        return "Otomotiv"
-    if meta_type == "property":
-        return "Emlak"
+    
+    # Map metadata types to categories
+    type_to_category = {
+        "vehicle": "Otomotiv",
+        "property": "Emlak",
+        "electronics": "Elektronik",
+        "phone": "Elektronik",
+        "computer": "Elektronik",
+        "appliance": "Ev & Yaşam",
+        "furniture": "Ev & Yaşam",
+        "clothing": "Moda & Giyim",
+        "general": "Genel"
+    }
+    
+    if meta_type and meta_type in type_to_category:
+        return type_to_category[meta_type]
+    
     return category
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
