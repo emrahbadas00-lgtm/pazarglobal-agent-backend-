@@ -29,6 +29,27 @@ def normalize_category_with_metadata(category: Optional[str], metadata: Optional
     
     return category
 
+
+def normalize_metadata_type_with_category(metadata: Optional[dict], category: Optional[str]) -> Optional[dict]:
+    """If user explicitly changes category, keep metadata->type aligned (best-effort)."""
+    if not isinstance(metadata, dict):
+        return metadata
+    if not category:
+        return metadata
+
+    cat = str(category).lower()
+    if "emlak" in cat:
+        metadata["type"] = "property"
+    elif "otomotiv" in cat:
+        metadata["type"] = "vehicle"
+    elif "elektr" in cat:
+        metadata["type"] = "electronics"
+    elif "moda" in cat or "giyim" in cat:
+        metadata["type"] = "clothing"
+    else:
+        metadata.setdefault("type", "general")
+    return metadata
+
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 
@@ -117,16 +138,14 @@ async def update_listing(
             "error": "No fields provided to update"
         }
     
-    # 🤖 AI-POWERED CATEGORY VALIDATION (if category is being updated)
+    # NOTE: Category updates must respect the user's explicit request.
+    # We may still record an AI suggestion for observability, but we do NOT override `category`.
     if category is not None:
-        # Get current listing to validate against title/description
-        # If title/description also being updated, use new values
-        validation_title = title  # Will be None if not being updated
-        validation_description = description  # Will be None if not being updated
-        
-        # If we're updating category but not title/description, we need to fetch current values
-        if validation_title is None or validation_description is None:
-            try:
+        try:
+            validation_title = title
+            validation_description = description
+
+            if validation_title is None or validation_description is None:
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     fetch_resp = await client.get(
                         f"{SUPABASE_URL}/rest/v1/listings?id=eq.{listing_id}&select=title,description",
@@ -139,32 +158,18 @@ async def update_listing(
                         current = fetch_resp.json()[0]
                         validation_title = validation_title or current.get("title")
                         validation_description = validation_description or current.get("description")
-            except Exception as e:
-                print(f"⚠️ Could not fetch current listing for validation: {e}")
-        
-        # Validate category
-        if validation_title:
-            print(f"🔍 Validating category update: {category}")
-            suggestion = await suggest_category(validation_title, validation_description, category)
-            if suggestion["success"] and not suggestion.get("is_correct", True):
-                original_category = category
-                category = suggestion["suggested_category"]
-                payload["category"] = category
-                print(f"⚠️ Category mismatch detected during update!")
-                print(f"   User selected: {original_category}")
-                print(f"   AI suggests: {category} (confidence: {suggestion['confidence']})")
-                print(f"   Auto-correcting to: {category}")
-                
-                # Store correction info in metadata
-                if metadata is None:
-                    metadata = payload.get("metadata", {})
-                if metadata:
-                    metadata["original_category"] = original_category
-                    metadata["category_corrected"] = True
-                    payload["metadata"] = metadata
 
-                # Align category with metadata type to avoid cross-category saves
-                payload["category"] = normalize_category_with_metadata(payload.get("category"), metadata or payload.get("metadata"))
+            if validation_title:
+                suggestion = await suggest_category(validation_title, validation_description, category)
+                if suggestion.get("success") and not suggestion.get("is_correct", True):
+                    payload["metadata"] = normalize_metadata_type_with_category(payload.get("metadata") or {}, category)
+                    payload["metadata"]["category_suggestion"] = {
+                        "requested": category,
+                        "suggested": suggestion.get("suggested_category"),
+                        "confidence": suggestion.get("confidence"),
+                    }
+        except Exception:
+            pass
     
     headers = {
         "apikey": SUPABASE_KEY,

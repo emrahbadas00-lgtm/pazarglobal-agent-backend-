@@ -324,9 +324,13 @@ async def web_chat_endpoint(request: AgentRequest):
                     "authenticated": True,
                     "session_expires_at": None,
                 }
+                # NOTE: `draft_listing_id` is for unfinished listing creation.
+                # Do not treat it as an "active listing" for updates.
+                incoming_state = request.conversation_state if isinstance(request.conversation_state, dict) else {}
                 conversation_state = {
-                    "mode": "web",
-                    "active_listing_id": request.draft_listing_id,
+                    "mode": incoming_state.get("mode") or "web",
+                    "active_listing_id": incoming_state.get("active_listing_id"),
+                    "last_intent": incoming_state.get("last_intent"),
                 }
 
                 workflow_input = WorkflowInput(

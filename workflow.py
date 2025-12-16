@@ -58,6 +58,8 @@ TODO: Implement after Phase 3 (Listing Management) is complete.
 """
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownArgumentType=false, reportMissingParameterType=false, reportMissingTypeArgument=false
 import os
+import re
+import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from agents import Agent, AgentOutputSchema, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
@@ -169,6 +171,45 @@ def resolve_auth_context() -> Dict[str, Any]:
 def resolve_conversation_state() -> Dict[str, Any]:
     ctx = get_workflow_context()
     return ctx.conversation_state if ctx and ctx.conversation_state else {}
+
+
+def _is_uuid(value: Optional[str]) -> bool:
+    if not value:
+        return False
+    try:
+        uuid.UUID(str(value))
+        return True
+    except Exception:
+        return False
+
+
+def _extract_uuid(text: str) -> Optional[str]:
+    if not text:
+        return None
+    match = re.search(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", text)
+    return match.group(0) if match else None
+
+
+def _extract_listing_number(text: str) -> Optional[int]:
+    """Best-effort parse for Turkish patterns like '1 nolu ilan', 'ilan #2', '2 numaralı ilan'."""
+    if not text:
+        return None
+    lowered = text.lower()
+    patterns = [
+        r"\b(\d{1,3})\s*(?:nolu|no\.?|numaralı)\s*ilan\b",
+        r"\bilan\s*#?\s*(\d{1,3})\b",
+        r"\b#\s*(\d{1,3})\b",
+    ]
+    for pat in patterns:
+        m = re.search(pat, lowered)
+        if not m:
+            continue
+        try:
+            num = int(m.group(1))
+            return num if num > 0 else None
+        except Exception:
+            continue
+    return None
 
 # Native function tool definitions (plain Python async functions)
 @function_tool
@@ -411,7 +452,7 @@ async def search_listings_tool(
         limit: Sonuç sayısı limiti
         metadata_type: Metadata type filter
     """
-    return await search_listings(
+    result = await search_listings(
         query=query,
         category=category,
         condition=condition,
@@ -421,6 +462,30 @@ async def search_listings_tool(
         limit=limit,
         metadata_type=metadata_type
     )
+
+    # Persist last search results per user so follow-ups like "1 nolu ilan" stay deterministic
+    try:
+        user_key = resolve_user_id() or "anonymous"
+        if isinstance(result, dict) and result.get("success") and isinstance(result.get("results"), list):
+            compact: List[Dict[str, Any]] = []
+            for item in cast(List[Any], result.get("results") or []):
+                if not isinstance(item, dict):
+                    continue
+                listing_id = item.get("id")
+                if not listing_id:
+                    continue
+                compact.append({
+                    "id": listing_id,
+                    "title": item.get("title"),
+                    "price": item.get("price"),
+                    "category": item.get("category"),
+                    "location": item.get("location"),
+                })
+            USER_LAST_SEARCH_RESULTS_STORE[user_key] = compact[:25]
+    except Exception:
+        pass
+
+    return result
 
 
 @function_tool(strict_mode=False)
@@ -451,8 +516,52 @@ async def update_listing_tool(
             "error": "not_authenticated",
             "message": "User not authenticated",
         }
+
+    # Normalize/resolve listing_id (agents sometimes pass "#1" or embed UUID in text)
+    original_listing_id = listing_id
+    listing_id_candidate = str(listing_id or "").strip()
+    if not _is_uuid(listing_id_candidate):
+        extracted = _extract_uuid(listing_id_candidate)
+        if extracted and _is_uuid(extracted):
+            listing_id_candidate = extracted
+
+    if not _is_uuid(listing_id_candidate):
+        # Try mapping from last search results: "1 nolu ilan" → stored result id
+        num = _extract_listing_number(listing_id_candidate)
+        if num is not None:
+            last = USER_LAST_SEARCH_RESULTS_STORE.get(resolved_user_id) or []
+            idx = num - 1
+            if 0 <= idx < len(last):
+                mapped_id = last[idx].get("id")
+                if mapped_id and _is_uuid(str(mapped_id)):
+                    listing_id_candidate = str(mapped_id)
+
+    if not _is_uuid(listing_id_candidate):
+        # Fall back to active listing in conversation_state/store
+        state = resolve_conversation_state()
+        active = state.get("active_listing_id") if isinstance(state, dict) else None
+        if active and _is_uuid(str(active)):
+            listing_id_candidate = str(active)
+        else:
+            active_store = USER_ACTIVE_LISTING_STORE.get(resolved_user_id)
+            if active_store and _is_uuid(str(active_store)):
+                listing_id_candidate = str(active_store)
+
+    if not _is_uuid(listing_id_candidate):
+        return {
+            "success": False,
+            "error": "invalid_listing_id",
+            "message": f"Invalid listing_id: {original_listing_id}",
+        }
+
+    # Persist active listing for subsequent photo/category updates
+    USER_ACTIVE_LISTING_STORE[resolved_user_id] = listing_id_candidate
+    state_for_update = resolve_conversation_state()
+    if isinstance(state_for_update, dict):
+        state_for_update["active_listing_id"] = listing_id_candidate
+
     return await update_listing(
-        listing_id=listing_id,
+        listing_id=listing_id_candidate,
         user_id=resolved_user_id,
         title=title,
         price=price,
@@ -1887,6 +1996,14 @@ class WorkflowInput(BaseModel):
 # TODO: Replace with Redis/DB for production; this is in-memory for now
 USER_SAFE_MEDIA_STORE: Dict[str, List[str]] = {}
 
+# Session store for last search results (compact), so "1 nolu ilan" can be resolved even if history is pruned.
+# Format: {user_id: [{id,title,price,category,location}, ...]}
+USER_LAST_SEARCH_RESULTS_STORE: Dict[str, List[Dict[str, Any]]] = {}
+
+# Session store for currently active listing (selected listing for update flows)
+# Format: {user_id: listing_id}
+USER_ACTIVE_LISTING_STORE: Dict[str, str] = {}
+
 
 # Main workflow runner
 async def run_workflow(workflow_input: WorkflowInput):
@@ -1980,6 +2097,54 @@ async def run_workflow(workflow_input: WorkflowInput):
         user_id_key = resolve_user_id(workflow_input.user_id) or workflow_input.user_id or "anonymous"
         pending_safe_media = USER_SAFE_MEDIA_STORE.get(user_id_key, [])
         has_explicit_media = bool(workflow.get("media_paths"))
+
+        # If we have a stored active listing for this user and none is provided, reuse it
+        if isinstance(ctx.conversation_state, dict) and not ctx.conversation_state.get("active_listing_id"):
+            stored_active = USER_ACTIVE_LISTING_STORE.get(user_id_key)
+            if stored_active:
+                ctx.conversation_state["active_listing_id"] = stored_active
+
+        # If user references "X nolu ilan", resolve it against last search results and persist active listing
+        raw_user_text_full = (workflow.get("input_as_text") or "")
+        requested_num = _extract_listing_number(raw_user_text_full)
+        if requested_num is not None:
+            last = USER_LAST_SEARCH_RESULTS_STORE.get(user_id_key) or []
+            idx = requested_num - 1
+            if 0 <= idx < len(last):
+                mapped_id = last[idx].get("id")
+                if mapped_id and _is_uuid(str(mapped_id)):
+                    USER_ACTIVE_LISTING_STORE[user_id_key] = str(mapped_id)
+                    if isinstance(ctx.conversation_state, dict):
+                        ctx.conversation_state["active_listing_id"] = str(mapped_id)
+                    conversation_history.append(cast(TResponseInputItem, {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": f"[CONVERSATION_STATE] ACTIVE_LISTING_ID={mapped_id}"}
+                        ]
+                    }))
+
+        # Inject last search results summary when it can help follow-up actions
+        raw_user_text_l = raw_user_text_full.strip().lower()
+        needs_last_search_context = any(k in raw_user_text_l for k in (
+            "nolu", "numar", "detay", "göster", "goster", "foto", "kategori", "güncelle", "guncelle", "sil"
+        ))
+        if needs_last_search_context:
+            last = USER_LAST_SEARCH_RESULTS_STORE.get(user_id_key) or []
+            if last:
+                lines: List[str] = []
+                for i, item in enumerate(last[:10], start=1):
+                    title = item.get("title") or ""
+                    listing_id = item.get("id") or ""
+                    if not listing_id:
+                        continue
+                    lines.append(f"#{i} id={listing_id} title={title}")
+                if lines:
+                    conversation_history.append(cast(TResponseInputItem, {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "[LAST_SEARCH_RESULTS] " + " | ".join(lines)}
+                        ]
+                    }))
         
         # Add previous conversation context if exists (NOT including current message)
         for msg in pruned_history:
