@@ -183,6 +183,7 @@ pazarglobal-whatsapp-bridge/
 ## 🗄️ Database Tabloları
 
 ### **user_security** (PIN Storage)
+
 ```sql
 id              | UUID PRIMARY KEY
 user_id         | UUID UNIQUE REFERENCES profiles(id)
@@ -197,6 +198,7 @@ updated_at      | TIMESTAMP
 ```
 
 ### **user_sessions** (Session Management)
+
 ```sql
 id              | UUID PRIMARY KEY
 user_id         | UUID REFERENCES profiles(id)
@@ -214,6 +216,7 @@ user_agent      | TEXT
 ```
 
 ### **pin_verification_attempts** (Audit Log)
+
 ```sql
 id              | UUID PRIMARY KEY
 phone           | TEXT
@@ -228,11 +231,13 @@ user_agent      | TEXT
 ## 🔑 Environment Variables
 
 ### **Supabase Edge Function**
+
 ```bash
 BACKEND_URL=https://pazarglobal-agent-backend-production-4ec8.up.railway.app
 ```
 
 ### **WhatsApp Bridge (Railway)**
+
 ```bash
 EDGE_FUNCTION_URL=https://YOUR_PROJECT.supabase.co/functions/v1/whatsapp-traffic-controller
 AGENT_BACKEND_URL=https://pazarglobal-agent-backend-production-4ec8.up.railway.app
@@ -244,6 +249,7 @@ TWILIO_WHATSAPP_NUMBER=+14155238886
 ```
 
 ### **Agent Backend (Railway)**
+
 ```bash
 # Session kontrolü YOK - Edge Function hallediyor
 OPENAI_API_KEY=sk-...
@@ -256,18 +262,21 @@ SUPABASE_SERVICE_KEY=...
 ## 🔐 Güvenlik Özellikleri
 
 ### 1. **Brute Force Protection**
+
 ```
 3 hatalı PIN denemesi → 15 dakika block
 pin_verification_attempts tablosunda log tutuluyor
 ```
 
 ### 2. **Session Timeout**
+
 ```
 10 dakikalık timer (user-friendly, öngörülebilir)
 Otomatik expire: expires_at > now()
 ```
 
 ### 3. **Rate Limiting** (Middleware - değişmez)
+
 ```
 100 request / 60 saniye
 SQL Injection & XSS koruması
@@ -275,12 +284,14 @@ Security headers
 ```
 
 ### 4. **IP Binding** (Opsiyonel - ileride)
+
 ```
 Session oluştururken IP kaydedilir
 Farklı IP'den gelen request reddedilebilir
 ```
 
 ### 5. **RLS Policies**
+
 ```
 Kullanıcılar sadece kendi security settings'lerini görebilir
 Sadece admin pin_verification_attempts görebilir
@@ -291,6 +302,7 @@ Sadece admin pin_verification_attempts görebilir
 ## 📊 Monitoring Queries
 
 ### Active Sessions
+
 ```sql
 SELECT 
   phone,
@@ -304,6 +316,7 @@ ORDER BY created_at DESC;
 ```
 
 ### Failed PIN Attempts (Son 24 saat)
+
 ```sql
 SELECT 
   phone,
@@ -318,6 +331,7 @@ ORDER BY failed DESC;
 ```
 
 ### Session Statistics
+
 ```sql
 SELECT * FROM session_stats 
 WHERE day > now() - INTERVAL '7 days'
@@ -325,6 +339,7 @@ ORDER BY day DESC;
 ```
 
 ### Locked Accounts
+
 ```sql
 SELECT 
   phone,

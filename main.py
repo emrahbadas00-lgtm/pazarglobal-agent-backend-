@@ -316,6 +316,17 @@ async def web_chat_endpoint(request: AgentRequest):
                     error_data = {"type": "error", "content": "Empty response"}
                     yield f"data: {json.dumps(error_data)}\n\n"
                     return
+
+                # Send media meta (safe/blocked) before text so frontend can persist pending images
+                safe_media_paths = result.get("safe_media_paths")
+                blocked_media_paths = result.get("blocked_media_paths")
+                if safe_media_paths or blocked_media_paths:
+                    meta_data = {
+                        "type": "meta",
+                        "safe_media_paths": safe_media_paths or [],
+                        "blocked_media_paths": blocked_media_paths or [],
+                    }
+                    yield f"data: {json.dumps(meta_data)}\n\n"
                 
                 logger.info(f"✅ Web workflow completed: intent={result['intent']}")
                 

@@ -1590,10 +1590,12 @@ smalltalkagent = Agent(
 - **PRIORITY:** If user sent ONLY photo (no text or < 5 words) → YOU MUST describe the image first!
   → Extract: title, category, condition, attributes from [VISION_PRODUCT]
   → Natural description: "Görselde [title] görüyorum ([attributes]), [condition] durumda gözüküyor."
-  → Then ask: "Bununla ilgili ne yapmak istersin? Satmak mı, yoksa sadece merak mı ettin?"
+  → **ACKNOWLEDGE SAFE STORAGE:** "Fotoğrafı kaydettim, ilan vermek istersen kullanırız."
+  → Then ask: "İlan vermek ister misin, yoksa başka fotoğraf eklemek ister misin?"
 - When user asks "ne görüyorsun" or "bana görseli anlat":
-  → Same process: describe product naturally and ask intent
-- IMPORTANT: Vision description should be FIRST thing you say when [VISION_PRODUCT] exists and user hasn't stated intent yet.
+  → Same process: describe product naturally, acknowledge storage, and ask intent
+- **MULTI-IMAGE:** If user sends multiple photos, acknowledge: "X adet fotoğraf yüklendi ve kaydedildi."
+- IMPORTANT: Vision description + storage acknowledgment should be FIRST thing you say when [VISION_PRODUCT] exists and user hasn't stated intent yet.
 
 ✅ STYLE RULES (IMPORTANT):
 - Keep responses 1–3 short sentences.
@@ -1817,6 +1819,16 @@ CURRENT_REQUEST_USER_ID: Optional[str] = None
 CURRENT_REQUEST_USER_NAME: Optional[str] = None
 CURRENT_REQUEST_USER_PHONE: Optional[str] = None
 
+# Session store for safe media paths (persists across messages within a session)
+# Format: {user_id: [safe_path1, safe_path2, ...]}
+# TODO: Replace with Redis/DB for production; this is in-memory for now
+USER_SAFE_MEDIA_STORE: Dict[str, List[str]] = {}
+
+# Session store for safe media paths (persists across messages within a session)
+# Format: {user_id: [safe_path1, safe_path2, ...]}
+# TODO: Replace with Redis/DB for production; this is in-memory for now
+USER_SAFE_MEDIA_STORE: Dict[str, List[str]] = {}
+
 
 # Main workflow runner
 async def run_workflow(workflow_input: WorkflowInput):
@@ -1846,6 +1858,12 @@ async def run_workflow(workflow_input: WorkflowInput):
         # (vision + long threads can reach 100K tokens otherwise)
         raw_history = workflow.get("conversation_history", [])
         pruned_history = raw_history[-10:] if len(raw_history) > 10 else raw_history
+        
+        # Server-side pending safe media: if this user has safe images from previous message,
+        # inject them as SYSTEM_MEDIA_NOTE so agents can use them (WhatsApp/WebChat both benefit)
+        user_id_key = workflow_input.user_id or "anonymous"
+        pending_safe_media = USER_SAFE_MEDIA_STORE.get(user_id_key, [])
+        has_explicit_media = bool(workflow.get("media_paths"))
         
         # Add previous conversation context if exists (NOT including current message)
         for msg in pruned_history:
@@ -1895,17 +1913,10 @@ async def run_workflow(workflow_input: WorkflowInput):
             ]
         }))
 
-        # Attach media/context note so agents see uploaded paths and draft id
-        if workflow.get("media_paths") or workflow.get("draft_listing_id"):
-            media_note_parts: List[str] = []
-            if workflow.get("draft_listing_id"):
-                media_note_parts.append(f"DRAFT_LISTING_ID={workflow['draft_listing_id']}")
-            if workflow.get("media_paths"):
-                media_note_parts.append(f"MEDIA_PATHS={workflow['media_paths']}")
-            
-            media_note_text = f"[SYSTEM_MEDIA_NOTE] {' | '.join(media_note_parts)}"
+        # Attach draft context note (media paths are attached AFTER safety check as SAFE_MEDIA_PATHS)
+        if workflow.get("draft_listing_id"):
+            media_note_text = f"[SYSTEM_MEDIA_NOTE] DRAFT_LISTING_ID={workflow['draft_listing_id']}"
             logger.info(f"📝 Adding SYSTEM_MEDIA_NOTE to conversation: {media_note_text}")
-            
             conversation_history.append(cast(TResponseInputItem, {
                 "role": "assistant",
                 "content": [
@@ -1949,70 +1960,138 @@ async def run_workflow(workflow_input: WorkflowInput):
 
         # Step 0: Vision safety + product extraction (if media provided)
         media_paths_raw = workflow.get("media_paths")
-        media_paths: List[str] = media_paths_raw if isinstance(media_paths_raw, list) else ([] if media_paths_raw is None else [str(media_paths_raw)])
-        vision_safety_result = None
+        media_paths_in: List[str] = media_paths_raw if isinstance(media_paths_raw, list) else ([] if media_paths_raw is None else [str(media_paths_raw)])
+
+        # De-duplicate paths while preserving order
+        seen_paths: set[str] = set()
+        media_paths: List[str] = []
+        for p in media_paths_in:
+            sp = str(p).strip()
+            if not sp:
+                continue
+            if sp in seen_paths:
+                continue
+            seen_paths.add(sp)
+            media_paths.append(sp)
+
+        safe_media_paths: List[str] = []
+        blocked_media_paths: List[Dict[str, Any]] = []
+        first_safe_vision: Optional[Dict[str, Any]] = None
+
         if media_paths:
-            first_image: str = str(media_paths[0])
-            first_image_url: str = _resolve_public_image_url(first_image)
-            vision_input: List[TResponseInputItem] = cast(List[TResponseInputItem], [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": "Analyze the attached image for safety and product. Return JSON only."},
-                        {"type": "input_image", "image_url": first_image_url}
-                    ]
-                }
-            ])
+            for media_path in media_paths:
+                image_url = _resolve_public_image_url(str(media_path))
+                vision_input: List[TResponseInputItem] = cast(List[TResponseInputItem], [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Analyze the attached image for safety and product. Return JSON only."},
+                            {"type": "input_image", "image_url": image_url}
+                        ]
+                    }
+                ])
 
-            try:
-                vision_result_temp = await Runner.run(
-                    vision_safety_product_agent,
-                    input=vision_input,  # type: ignore[arg-type]
-                    run_config=RunConfig(trace_metadata={
-                        "__trace_source__": "agent-builder",
-                        "workflow_id": "vision_safety_product"
+                try:
+                    vision_result_temp = await Runner.run(
+                        vision_safety_product_agent,
+                        input=vision_input,  # type: ignore[arg-type]
+                        run_config=RunConfig(trace_metadata={
+                            "__trace_source__": "agent-builder",
+                            "workflow_id": "vision_safety_product"
+                        })
+                    )
+                    vision_result = vision_result_temp.final_output.model_dump()
+                except Exception as exc:  # pragma: no cover
+                    blocked_media_paths.append({
+                        "path": str(media_path),
+                        "reason": f"vision_error: {exc}",
                     })
-                )
-                vision_safety_result = vision_result_temp.final_output.model_dump()
-            except Exception as exc:  # pragma: no cover
-                return {
-                    "response": f"Görsel analizinde hata oluştu: {exc}",
-                    "intent": "vision_safety_error",
-                    "success": False
-                }
+                    continue
 
-            if not vision_safety_result.get("safe") or not vision_safety_result.get("allow_listing", False):
-                # Log flag for admin review (no auto-ban)
-                log_image_safety_flag(
-                    user_id=workflow.get("user_id"),
-                    image_url=str(first_image),
-                    flag_type=vision_safety_result.get("flag_type", "unknown"),
-                    confidence=vision_safety_result.get("confidence", "low"),
-                    message=vision_safety_result.get("message", "unsafe"),
-                )
+                if not vision_result.get("safe") or not vision_result.get("allow_listing", False):
+                    # Log flag for admin review (no auto-ban)
+                    log_image_safety_flag(
+                        user_id=workflow.get("user_id"),
+                        image_url=str(media_path),
+                        flag_type=vision_result.get("flag_type", "unknown"),
+                        confidence=vision_result.get("confidence", "low"),
+                        message=vision_result.get("message", "unsafe"),
+                    )
+                    blocked_media_paths.append({
+                        "path": str(media_path),
+                        "reason": vision_result.get("message", "unsafe"),
+                        "flag_type": vision_result.get("flag_type", "unknown"),
+                        "confidence": vision_result.get("confidence", "low"),
+                    })
+                    continue
 
+                safe_media_paths.append(str(media_path))
+                if first_safe_vision is None:
+                    first_safe_vision = vision_result
+
+            # If all images are blocked, stop
+            if not safe_media_paths:
+                first_reason = blocked_media_paths[0].get("reason") if blocked_media_paths else "unsafe image"
                 return {
-                    "response": f"❌ Güvenlik nedeniyle reddedildi: {vision_safety_result.get('message', 'unsafe image')}. Bu görsel işleme alınmadı, lütfen farklı bir görsel gönderin.",
+                    "response": f"❌ Güvenlik nedeniyle reddedildi: {first_reason}. Bu görseller işleme alınmadı, lütfen farklı görsel gönderin.",
                     "intent": "vision_safety_blocked",
-                    "success": False
+                    "success": False,
+                    "safe_media_paths": [],
+                    "blocked_media_paths": blocked_media_paths,
                 }
 
-            # Safe: append compact product summary for downstream agents
-            product_info: Dict[str, Any] = vision_safety_result.get("product") or {}
-            product_attrs = ", ".join(cast(List[str], product_info.get("attributes", []) or []))
+            # Attach SAFE media paths for downstream agents (listing/publish)
+            safe_media_note_parts: List[str] = []
+            if workflow.get("draft_listing_id"):
+                safe_media_note_parts.append(f"DRAFT_LISTING_ID={workflow['draft_listing_id']}")
+            safe_media_note_parts.append(f"MEDIA_PATHS={safe_media_paths}")
+            safe_media_note_text = f"[SYSTEM_MEDIA_NOTE] {' | '.join(safe_media_note_parts)}"
+            logger.info(f"📝 Adding SYSTEM_MEDIA_NOTE (SAFE MEDIA_PATHS) to conversation: {safe_media_note_text}")
             conversation_history.append(cast(TResponseInputItem, {
                 "role": "assistant",
                 "content": [
                     {
                         "type": "output_text",
-                        "text": (
-                            f"[VISION_PRODUCT] safe=true; allow_listing={vision_safety_result.get('allow_listing', True)}; "
-                            f"title={product_info.get('title') or 'unknown'}; "
-                            f"category={product_info.get('category') or 'unknown'}; "
-                            f"condition={product_info.get('condition') or 'unknown'}; "
-                            f"quantity={product_info.get('quantity') or 1}; "
-                            f"attributes={product_attrs or 'none'}"
-                        )
+                        "text": safe_media_note_text
+                    }
+                ]
+            }))
+            
+            # Store safe media in session for WhatsApp multi-message flow
+            USER_SAFE_MEDIA_STORE[user_id_key] = safe_media_paths[:]
+            logger.info(f"💾 Stored {len(safe_media_paths)} safe media paths for user {user_id_key}")
+
+            # Append compact product summary for downstream agents (use first safe image only)
+            if first_safe_vision:
+                product_info: Dict[str, Any] = first_safe_vision.get("product") or {}
+                product_attrs = ", ".join(cast(List[str], product_info.get("attributes", []) or []))
+                conversation_history.append(cast(TResponseInputItem, {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": (
+                                f"[VISION_PRODUCT] safe=true; allow_listing={first_safe_vision.get('allow_listing', True)}; "
+                                f"title={product_info.get('title') or 'unknown'}; "
+                                f"category={product_info.get('category') or 'unknown'}; "
+                                f"condition={product_info.get('condition') or 'unknown'}; "
+                                f"quantity={product_info.get('quantity') or 1}; "
+                                f"attributes={product_attrs or 'none'}"
+                            )
+                        }
+                    ]
+                }))
+        elif pending_safe_media and not has_explicit_media:
+            # No new media this message, but user has pending safe media from previous upload
+            # → inject it so agent can use (WhatsApp: "send photo" then "publish listing" flow)
+            pending_note = f"[SYSTEM_MEDIA_NOTE] MEDIA_PATHS={pending_safe_media}"
+            logger.info(f"♻️ Injecting pending safe media for user {user_id_key}: {pending_note}")
+            conversation_history.append(cast(TResponseInputItem, {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": pending_note
                     }
                 ]
             }))
@@ -2127,8 +2206,19 @@ async def run_workflow(workflow_input: WorkflowInput):
         else:
             return {"error": "Unknown intent", "intent": intent}
         
+        final_response = result.final_output_as(str)
+        
+        # Clear pending safe media after publish/cancel (heuristic cleanup)
+        if final_response:
+            response_lower = final_response.lower()
+            if any(keyword in response_lower for keyword in ["ilan yayınlandı", "✅ ilan yayınlandı", "iptal edildi", "işlemi iptal"]):
+                USER_SAFE_MEDIA_STORE.pop(user_id_key, None)
+                logger.info(f"🧹 Cleared pending safe media for user {user_id_key} after publish/cancel")
+        
         return {
-            "response": result.final_output_as(str),
+            "response": final_response,
             "intent": intent,
-            "success": True
+            "success": True,
+            "safe_media_paths": safe_media_paths if 'safe_media_paths' in locals() else [],
+            "blocked_media_paths": blocked_media_paths if 'blocked_media_paths' in locals() else [],
         }

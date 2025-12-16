@@ -19,12 +19,19 @@ def make_admin(phone_or_email: str):
         # Email lookup
         result = supabase.table("profiles").select("*").eq("email", phone_or_email).execute()
     
-    if not result.data:
+    if not result.data or len(result.data) == 0:
         print(f"❌ User not found: {phone_or_email}")
         return
     
     user = result.data[0]
-    user_id = user["id"]
+    if not isinstance(user, dict):
+        print(f"❌ Invalid user data")
+        return
+        
+    user_id = user.get("id")
+    if not user_id:
+        print(f"❌ User ID not found")
+        return
     
     print(f"✅ Found user: {user.get('display_name', 'Unknown')} ({user_id})")
     
