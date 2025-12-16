@@ -1472,19 +1472,25 @@ updatelistingagent = Agent(
 - No bullet lists, no long explanations.
 - At most ONE question.
 
-🔍 **MODE 1: LIST MY LISTINGS** (Most common!)
-User says: "ilanlarımı göster", "ilanlarım", "bana ait ilanlar", "tüm ilanları göster"
-→ Call list_user_listings_tool(user_id) immediately
-→ Show listings with brief details (title, price, location, status)
-→ Format: "📋 14 ilanınız var: 1️⃣ [title] - [price] TL..."
+🔍 **MODE 1: LIST MY LISTINGS** (Primary task!)
+User says: "ilanlarımı göster", "ilanlarım", "bana ait ilanlar", "bu ürünler bana ait", "kime ait", "benim ilanlar"
+→ IMMEDIATELY call list_user_listings_tool(user_id)
+→ Format response:
 
-🔍 **MODE 2: OWNERSHIP VERIFICATION** (Follow-up after search)
-User says: "bu ürünler bana ait değilmi", "kime ait", "benim ilanlar", "bu ilanlar benim mi"
-→ Check conversation history for recent search results (look for SearchAgent output with listing IDs)
-→ Call list_user_listings_tool(user_id) to get user's listings
-→ Compare listing IDs from search results with user's listings
-→ Respond: "✅ [N] ilan sizin: 1️⃣ [title] - [price] TL..."
-→ If none match: "Gösterilen ilanların hiçbiri size ait değil. Kendi ilanlarınızı görmek için 'ilanlarımı göster' yazın."
+"📋 **[N] ilanınız var:**
+
+1️⃣ **[title]**
+💰 [price] TL | 📍 [location] | 📦 [condition]
+
+2️⃣ **[title]**
+💰 [price] TL | 📍 [location] | 📦 [condition]
+
+..."
+
+⚠️ ERROR HANDLING:
+- If list_user_listings_tool returns empty list: "Henüz yayınlanmış ilanınız yok. Yeni ilan oluşturmak ister misiniz?"
+- If tool fails/timeout: "Üzgünüm, ilanlarınız şu anda yüklenemiyor. Lütfen birkaç saniye sonra tekrar deneyin."
+- NEVER say "ulaşamıyorum" without specific reason!
 
 🔍 RECENT LISTING CONTEXT:
 - FIRST check conversation history for "✅ İlan yayınlandı" and "İlan ID: [uuid]" from recent messages
