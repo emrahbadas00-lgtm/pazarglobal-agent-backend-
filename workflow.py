@@ -1278,7 +1278,7 @@ Your response: "Otomotiv kategorisinde toplam 6 ilan bulundu." ← Use 'total' (
 **Important formatting rules for compact view:**
 - **ALWAYS show owner**: 👤 [user_name or user_phone]
 - If user_name exists: 👤 [user_name]
-- If user_name missing: show the actual owner_phone (do NOT mask or invent; if phone missing say "Telefon yok")
+- If user_name missing: show owner_phone; if empty, fall back to USER_PHONE from context; if still empty say "Telefon yok"
 - Only show: number, title, price, location, **owner**
 - Keep VERY short (total < 800 chars for 5 listings)
    💰 [price] TL | 📍 [location]
@@ -1342,10 +1342,10 @@ Konum: [location]
 Durum: [condition]
 Kategori: [category]
 [IF available: İlan ID: [id]]
-[IF available: İlan sahibi: [user_name OR owner_name] | Telefon: [user_phone OR owner_phone]]
+[IF available: İlan sahibi: [user_name OR owner_name] | Telefon: [user_phone OR owner_phone OR USER_PHONE]]
 [IF description exists and is short: Show first 100 chars only]
 
-Phone rule: Use the exact phone provided in listing (owner_phone/user_phone). Do NOT mask or fabricate. If phone is missing, say "Telefon yok" instead of masking.
+Phone rule: Use the exact phone provided in listing (owner_phone/user_phone). If missing, fall back to USER_PHONE from context. Do NOT mask or fabricate; if still missing, say "Telefon yok".
 
 Fotoğraflar:
 [EACH URL FROM signed_images ARRAY ON SEPARATE LINE - MAX 3 URLs]
@@ -1851,6 +1851,23 @@ async def run_workflow(workflow_input: WorkflowInput):
         
         # Build conversation history from previous messages
         conversation_history: List[TResponseInputItem] = []
+
+        # Expose user context to agents for fallback (owner phone/name)
+        if workflow_input.user_id or workflow_input.user_phone or workflow_input.user_name:
+            context_note_parts: List[str] = []
+            if workflow_input.user_id:
+                context_note_parts.append(f"USER_ID={workflow_input.user_id}")
+            if workflow_input.user_phone:
+                context_note_parts.append(f"USER_PHONE={workflow_input.user_phone}")
+            if workflow_input.user_name:
+                context_note_parts.append(f"USER_NAME={workflow_input.user_name}")
+            context_note = "[USER_CONTEXT] " + " | ".join(context_note_parts)
+            conversation_history.append(cast(TResponseInputItem, {
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": context_note}
+                ]
+            }))
         
         # TOKEN OPTIMIZATION: Keep only last 10 messages to avoid exponential history growth
         # (vision + long threads can reach 100K tokens otherwise)
@@ -2109,7 +2126,7 @@ async def run_workflow(workflow_input: WorkflowInput):
                 ]
             }))
         
-        # Step 1: Classify intent
+        # Step 1: Classify intent (ensure USER_CONTEXT note is part of history for personalization and ownership)
         if force_wallet_intent:
             intent = "wallet_query"
         else:
