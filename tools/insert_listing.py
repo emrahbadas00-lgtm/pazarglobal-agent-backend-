@@ -160,16 +160,26 @@ async def insert_listing(
                 listing_id_created = data.get("id")
             
             if listing_id_created:
-                print(f"💰 Deducting 25 credits for listing publish...")
+                # Calculate actual cost based on usage
+                total_cost = 25  # Base listing cost (₺5)
+                
+                # AI Assistant (WhatsApp conversation = always used)
+                total_cost += 10  # ₺2
+                
+                # Photo analysis (if photos uploaded)
+                if images and len(images) > 0:
+                    total_cost += 5 * len(images)  # ₺1 per photo
+                
+                print(f"💰 Deducting {total_cost} credits for listing (base 25kr + AI 10kr + {len(images) if images else 0} photos)...")
                 deduct_result = deduct_credits(
                     user_id=user_id,
-                    amount_credits=25,  # Base listing cost
+                    amount_credits=total_cost,
                     action="listing_publish",
                     reference=listing_id_created
                 )
                 
                 if deduct_result["success"]:
-                    print(f"✅ Credits deducted! New balance: {deduct_result['new_balance_credits']}kr")
+                    print(f"✅ Credits deducted! New balance: {deduct_result['new_balance_credits']}kr (₺{deduct_result['new_balance_credits'] * 0.20})")
                 else:
                     print(f"⚠️ Credit deduction failed: {deduct_result.get('error')}")
                     # Still return success for listing (credit issue shouldn't block listing)
