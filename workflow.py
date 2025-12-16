@@ -2190,6 +2190,16 @@ async def run_workflow(workflow_input: WorkflowInput):
             }
             
             intent = router_agent_intent_classifier_result["output_parsed"]["intent"]
+
+        # Authentication gate for protected intents
+        is_authenticated = bool(CURRENT_REQUEST_AUTH_CONTEXT and CURRENT_REQUEST_AUTH_CONTEXT.get("authenticated") and CURRENT_REQUEST_USER_ID)
+        protected_intents = {"update_listing", "delete_listing"}
+        if intent in protected_intents and not is_authenticated:
+            return {
+                "response": "Bu işlem için giriş yapmanız gerekiyor. Lütfen PIN ile giriş yapın.",
+                "intent": "auth_required",
+                "success": False
+            }
         
         # Step 2: Route to appropriate agent
         # TEMPORARILY DISABLED pin_request - causing 500 errors

@@ -77,6 +77,13 @@ async def update_listing(
             "status_code": 500,
             "error": "SUPABASE_URL or SUPABASE_SERVICE_KEY not configured"
         }
+
+    if not user_id:
+        return {
+            "success": False,
+            "status_code": 401,
+            "error": "Kullanıcı doğrulanmadı; güncelleme için user_id gerekli"
+        }
     
     # Build payload with only provided fields
     payload = {}
@@ -169,30 +176,29 @@ async def update_listing(
     url = f"{SUPABASE_URL}/rest/v1/listings"
     
     try:
-        # Ownership check: ensure listing belongs to user_id when provided
-        if user_id:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                ownership_resp = await client.get(
-                    f"{url}?id=eq.{listing_id}&select=id,user_id",
-                    headers={
-                        "apikey": SUPABASE_KEY,
-                        "Authorization": f"Bearer {SUPABASE_KEY}"
-                    }
-                )
-                if ownership_resp.is_success and ownership_resp.json():
-                    owner = ownership_resp.json()[0].get("user_id")
-                    if owner and owner != user_id:
-                        return {
-                            "success": False,
-                            "status_code": 403,
-                            "error": "Bu ilan size ait değil. Başkasının ilanını güncelleyemezsiniz."
-                        }
-                else:
+        # Ownership check: ensure listing belongs to user_id
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            ownership_resp = await client.get(
+                f"{url}?id=eq.{listing_id}&select=id,user_id",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}"
+                }
+            )
+            if ownership_resp.is_success and ownership_resp.json():
+                owner = ownership_resp.json()[0].get("user_id")
+                if owner and owner != user_id:
                     return {
                         "success": False,
-                        "status_code": ownership_resp.status_code,
-                        "error": "İlan bulunamadı veya erişim hatası"
+                        "status_code": 403,
+                        "error": "Bu ilan size ait değil. Başkasının ilanını güncelleyemezsiniz."
                     }
+            else:
+                return {
+                    "success": False,
+                    "status_code": ownership_resp.status_code,
+                    "error": "İlan bulunamadı veya erişim hatası"
+                }
 
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             # Supabase update with filter: PATCH /listings?id=eq.{listing_id}
