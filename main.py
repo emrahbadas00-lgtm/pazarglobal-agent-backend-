@@ -142,6 +142,9 @@ async def run_agent_workflow(request: AgentRequest):
     # Resolve user UUID from phone number (WhatsApp) or use provided user_id (Web)
     resolved_user_id = request.user_id
     user_name = None
+    user_phone = None  # ← Initialize early to avoid UnboundLocalError
+    
+    logger.info(f"🔍 DEBUG: Initial request.user_id={request.user_id}, request.phone={request.phone}")
     
     # Prefer explicit user_name from user_context
     if request.user_context and request.user_context.get("name"):
@@ -168,12 +171,13 @@ async def run_agent_workflow(request: AgentRequest):
                 params = {"phone": f"eq.{clean_phone}", "select": "id,full_name,phone"}
                 
                 resp = await client.get(profile_url, headers=headers, params=params)
+                logger.info(f"🔍 DEBUG: Profile lookup response status={resp.status_code}, data={resp.text[:200]}")
                 if resp.is_success and resp.json():
                     profile = resp.json()[0]
                     resolved_user_id = profile.get("id")  # ← UUID from profiles table
                     user_name = user_name or profile.get("full_name")
                     user_phone = profile.get("phone")  # Store phone for listing
-                    logger.info(f"✅ Resolved phone {clean_phone} → UUID: {resolved_user_id}, name: {user_name}")
+                    logger.info(f"✅ Resolved phone {clean_phone} → UUID: {resolved_user_id}, name: {user_name}, phone: {user_phone}")
                 else:
                     logger.warning(f"⚠️ No profile found for phone: {clean_phone}")
         except Exception as e:
@@ -182,6 +186,8 @@ async def run_agent_workflow(request: AgentRequest):
     try:
         # Run workflow using Agents SDK
         logger.info(f"📚 Conversation history: {len(request.conversation_history)} messages")
+        logger.info(f"🔍 DEBUG: Final resolved_user_id={resolved_user_id}, user_name={user_name}, user_phone={user_phone}")
+        
         workflow_input = WorkflowInput(
             input_as_text=request.message,
             conversation_history=request.conversation_history,
@@ -190,7 +196,7 @@ async def run_agent_workflow(request: AgentRequest):
             draft_listing_id=request.draft_listing_id,
             user_name=user_name,  # Pass user name to workflow
             user_id=resolved_user_id,  # Use resolved UUID, not phone number
-            user_phone=user_phone if 'user_phone' in locals() else None,  # Pass user phone
+            user_phone=user_phone,  # Pass user phone (now always defined)
         )
         result = await run_workflow(workflow_input)
         
