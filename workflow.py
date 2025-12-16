@@ -1258,10 +1258,10 @@ Your response: "Otomotiv kategorisinde toplam 6 ilan bulundu." ← Use 'total' (
 "🔍 İlk 5 ilan:
 
 1️⃣ [title]
-   💰 [price] TL | 📍 [location]
+   💰 [price] TL | 📍 [location] | 👤 [user_name or user_phone]
    
 2️⃣ [title]
-   💰 [price] TL | 📍 [location]
+   💰 [price] TL | 📍 [location] | 👤 [user_name or user_phone]
    
 3️⃣ ...
 4️⃣ ...
@@ -1271,9 +1271,11 @@ Your response: "Otomotiv kategorisinde toplam 6 ilan bulundu." ← Use 'total' (
 💡 Daha fazla: 'daha fazla göster'"
 
 **Important formatting rules for compact view:**
-- Remove condition, category, photo count (save space!)
-- Only show: number, title, price, location
-- Keep VERY short (total < 700 chars for 5 listings)
+- **ALWAYS show owner**: 👤 [user_name or user_phone]
+- If user_name exists: 👤 [user_name]
+- If user_name missing: 👤 +90***1234 (masked phone)
+- Only show: number, title, price, location, **owner**
+- Keep VERY short (total < 800 chars for 5 listings)
    💰 [price] TL | 📍 [location]
    
 3️⃣ ...
