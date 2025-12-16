@@ -91,6 +91,8 @@ class AgentRequest(BaseModel):
     draft_listing_id: Optional[str] = None
     session_token: Optional[str] = None
     user_context: Optional[Dict[str, Any]] = None
+    auth_context: Optional[Dict[str, Any]] = None  # {user_id, phone, authenticated, session_expires_at}
+    conversation_state: Optional[Dict[str, Any]] = None  # {mode, active_listing_id, last_intent}
 
 
 class AgentResponse(BaseModel):
@@ -139,10 +141,14 @@ async def run_agent_workflow(request: AgentRequest):
     logger.info(f"🎯 Running agent workflow for user: {request.user_id}")
     logger.info(f"📝 Message: {request.message}")
     
-    # Resolve user UUID from phone number (WhatsApp) or use provided user_id (Web)
+    # Resolve user UUID from provided auth_context first; fallback to phone lookup only if needed
     resolved_user_id = request.user_id
     user_name = None
     user_phone = None  # ← Initialize early to avoid UnboundLocalError
+    auth_ctx = request.auth_context or {}
+    auth_user_id = auth_ctx.get("user_id") if isinstance(auth_ctx, dict) else None
+    auth_phone = auth_ctx.get("phone") if isinstance(auth_ctx, dict) else None
+    auth_authenticated = bool(auth_ctx.get("authenticated")) if isinstance(auth_ctx, dict) else False
     
     logger.info(f"🔍 DEBUG: Initial request.user_id={request.user_id}, request.phone={request.phone}")
     
@@ -150,62 +156,64 @@ async def run_agent_workflow(request: AgentRequest):
     if request.user_context and request.user_context.get("name"):
         user_name = request.user_context.get("name")
 
-    # AGGRESSIVE PHONE LOOKUP: 
-    # If user_id looks like a phone number (starts with + or whatsapp: or contains non-UUID chars), 
-    # OR if request.phone is provided, do profile lookup
-    needs_phone_lookup = False
-    
-    # Check if user_id is NOT a valid UUID (36 chars with hyphens)
-    if request.user_id and len(request.user_id) == 36 and request.user_id.count('-') == 4:
-        # Looks like UUID, use it
-        logger.info(f"✅ user_id is valid UUID format: {request.user_id}")
-    elif request.user_id and (request.user_id.startswith('+') or request.user_id.startswith('whatsapp:')):
-        # Definitely phone format
-        needs_phone_lookup = True
-        logger.info(f"🔍 user_id is phone format: {request.user_id}")
-    elif request.user_id and not request.user_id.startswith('web_'):
-        # Not UUID, not web_ prefix → assume phone
-        needs_phone_lookup = True
-        logger.info(f"⚠️ user_id doesn't look like UUID: {request.user_id}, treating as phone")
-    
-    # If explicit phone provided, always lookup
-    if request.phone:
-        needs_phone_lookup = True
-        logger.info(f"📞 Explicit phone provided: {request.phone}")
-    
-    if needs_phone_lookup:
-        try:
-            import httpx
-            supabase_url = os.getenv("SUPABASE_URL")
-            supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
-            
-            async with httpx.AsyncClient() as client:
-                # Clean phone number (remove 'whatsapp:' prefix if present)
-                phone_to_lookup = request.phone or request.user_id
-                clean_phone = phone_to_lookup.replace('whatsapp:', '').strip()
+    # Prefer auth_context values when provided and authenticated
+    if auth_authenticated and auth_user_id:
+        resolved_user_id = auth_user_id
+        user_phone = auth_phone or request.phone
+        logger.info(f"✅ Using auth_context user_id={resolved_user_id}, phone={user_phone}")
+    else:
+        # AGGRESSIVE PHONE LOOKUP only if not already authenticated via auth_context
+        needs_phone_lookup = False
+
+        # Check if user_id is NOT a valid UUID (36 chars with hyphens)
+        if request.user_id and len(request.user_id) == 36 and request.user_id.count('-') == 4:
+            # Looks like UUID, use it
+            logger.info(f"✅ user_id is valid UUID format: {request.user_id}")
+        elif request.user_id and (request.user_id.startswith('+') or request.user_id.startswith('whatsapp:')):
+            needs_phone_lookup = True
+            logger.info(f"🔍 user_id is phone format: {request.user_id}")
+        elif request.user_id and not request.user_id.startswith('web_'):
+            needs_phone_lookup = True
+            logger.info(f"⚠️ user_id doesn't look like UUID: {request.user_id}, treating as phone")
+        
+        # If explicit phone provided, always lookup
+        if request.phone:
+            needs_phone_lookup = True
+            logger.info(f"📞 Explicit phone provided: {request.phone}")
+
+        if needs_phone_lookup:
+            try:
+                import httpx
+                supabase_url = os.getenv("SUPABASE_URL")
+                supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
                 
-                # Query profiles table by phone to get UUID
-                profile_url = f"{supabase_url}/rest/v1/profiles"
-                headers = {
-                    "apikey": supabase_key,
-                    "Authorization": f"Bearer {supabase_key}"
-                }
-                params = {"phone": f"eq.{clean_phone}", "select": "id,full_name,phone"}
-                
-                logger.info(f"🔍 DEBUG: Querying Supabase profiles with phone={clean_phone}")
-                resp = await client.get(profile_url, headers=headers, params=params)
-                logger.info(f"🔍 DEBUG: Profile lookup response status={resp.status_code}, data={resp.text[:300]}")
-                
-                if resp.is_success and resp.json():
-                    profile = resp.json()[0]
-                    resolved_user_id = profile.get("id")  # ← UUID from profiles table
-                    user_name = user_name or profile.get("full_name")
-                    user_phone = profile.get("phone")  # Store phone for listing
-                    logger.info(f"✅ Resolved phone {clean_phone} → UUID: {resolved_user_id}, name: {user_name}, phone: {user_phone}")
-                else:
-                    logger.warning(f"⚠️ No profile found for phone: {clean_phone}, keeping user_id as-is: {request.user_id}")
-        except Exception as e:
-            logger.error(f"❌ Error resolving user from phone: {str(e)}")
+                async with httpx.AsyncClient() as client:
+                    # Clean phone number (remove 'whatsapp:' prefix if present)
+                    phone_to_lookup = request.phone or request.user_id
+                    clean_phone = phone_to_lookup.replace('whatsapp:', '').strip()
+                    
+                    # Query profiles table by phone to get UUID
+                    profile_url = f"{supabase_url}/rest/v1/profiles"
+                    headers = {
+                        "apikey": supabase_key,
+                        "Authorization": f"Bearer {supabase_key}"
+                    }
+                    params = {"phone": f"eq.{clean_phone}", "select": "id,full_name,phone"}
+                    
+                    logger.info(f"🔍 DEBUG: Querying Supabase profiles with phone={clean_phone}")
+                    resp = await client.get(profile_url, headers=headers, params=params)
+                    logger.info(f"🔍 DEBUG: Profile lookup response status={resp.status_code}, data={resp.text[:300]}")
+                    
+                    if resp.is_success and resp.json():
+                        profile = resp.json()[0]
+                        resolved_user_id = profile.get("id")  # ← UUID from profiles table
+                        user_name = user_name or profile.get("full_name")
+                        user_phone = profile.get("phone")  # Store phone for listing
+                        logger.info(f"✅ Resolved phone {clean_phone} → UUID: {resolved_user_id}, name: {user_name}, phone: {user_phone}")
+                    else:
+                        logger.warning(f"⚠️ No profile found for phone: {clean_phone}, keeping user_id as-is: {request.user_id}")
+            except Exception as e:
+                logger.error(f"❌ Error resolving user from phone: {str(e)}")
     
     try:
         # Run workflow using Agents SDK
@@ -218,9 +226,11 @@ async def run_agent_workflow(request: AgentRequest):
             media_paths=request.media_paths,
             media_type=request.media_type,
             draft_listing_id=request.draft_listing_id,
-            user_name=user_name,  # Pass user name to workflow
-            user_id=resolved_user_id,  # Use resolved UUID, not phone number
-            user_phone=user_phone,  # Pass user phone (now always defined)
+            user_name=user_name,
+            user_id=resolved_user_id,
+            user_phone=user_phone,
+            auth_context=request.auth_context,
+            conversation_state=request.conversation_state,
         )
         result = await run_workflow(workflow_input)
         

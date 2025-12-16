@@ -1815,12 +1815,16 @@ class WorkflowInput(BaseModel):
     user_name: Optional[str] = None  # User's full name from Supabase profiles
     user_id: Optional[str] = None    # Authenticated user id for ownership checks
     user_phone: Optional[str] = None  # User's phone number
+    auth_context: Optional[Dict[str, Any]] = None  # {user_id, phone, authenticated, session_expires_at}
+    conversation_state: Optional[Dict[str, Any]] = None  # {mode, active_listing_id, last_intent}
 
 
 # Per-request context (set in run_workflow)
 CURRENT_REQUEST_USER_ID: Optional[str] = None
 CURRENT_REQUEST_USER_NAME: Optional[str] = None
 CURRENT_REQUEST_USER_PHONE: Optional[str] = None
+CURRENT_REQUEST_AUTH_CONTEXT: Optional[Dict[str, Any]] = None
+CURRENT_CONVERSATION_STATE: Optional[Dict[str, Any]] = None
 
 # Session store for safe media paths (persists across messages within a session)
 # Format: {user_id: [safe_path1, safe_path2, ...]}
@@ -1838,10 +1842,12 @@ async def run_workflow(workflow_input: WorkflowInput):
     logger = logging.getLogger(__name__)
     
     with trace("PazarGlobal"):
-        global CURRENT_REQUEST_USER_ID, CURRENT_REQUEST_USER_NAME, CURRENT_REQUEST_USER_PHONE
+        global CURRENT_REQUEST_USER_ID, CURRENT_REQUEST_USER_NAME, CURRENT_REQUEST_USER_PHONE, CURRENT_REQUEST_AUTH_CONTEXT, CURRENT_CONVERSATION_STATE
         CURRENT_REQUEST_USER_ID = workflow_input.user_id  # pyright: ignore[reportConstantRedefinition]
         CURRENT_REQUEST_USER_NAME = workflow_input.user_name  # pyright: ignore[reportConstantRedefinition]
         CURRENT_REQUEST_USER_PHONE = workflow_input.user_phone  # pyright: ignore[reportConstantRedefinition]
+        CURRENT_REQUEST_AUTH_CONTEXT = workflow_input.auth_context  # pyright: ignore[reportConstantRedefinition]
+        CURRENT_CONVERSATION_STATE = workflow_input.conversation_state  # pyright: ignore[reportConstantRedefinition]
         workflow = workflow_input.model_dump()
         
         # DEBUG: Log media paths to diagnose webchat image upload issue
@@ -1852,7 +1858,7 @@ async def run_workflow(workflow_input: WorkflowInput):
         # Build conversation history from previous messages
         conversation_history: List[TResponseInputItem] = []
 
-        # Expose user context to agents for fallback (owner phone/name)
+        # Expose user context and auth/state to agents for fallback (owner phone/name/auth/session)
         if workflow_input.user_id or workflow_input.user_phone or workflow_input.user_name:
             context_note_parts: List[str] = []
             if workflow_input.user_id:
@@ -1866,6 +1872,43 @@ async def run_workflow(workflow_input: WorkflowInput):
                 "role": "assistant",
                 "content": [
                     {"type": "output_text", "text": context_note}
+                ]
+            }))
+
+        if workflow_input.auth_context:
+            auth_parts: List[str] = []
+            ac = workflow_input.auth_context or {}
+            if isinstance(ac, dict):
+                if ac.get("user_id"):
+                    auth_parts.append(f"AUTH_USER_ID={ac.get('user_id')}")
+                if ac.get("phone"):
+                    auth_parts.append(f"AUTH_PHONE={ac.get('phone')}")
+                auth_parts.append(f"AUTHENTICATED={bool(ac.get('authenticated'))}")
+                if ac.get("session_expires_at"):
+                    auth_parts.append(f"SESSION_EXPIRES_AT={ac.get('session_expires_at')}")
+            auth_note = "[AUTH_CONTEXT] " + " | ".join(auth_parts)
+            conversation_history.append(cast(TResponseInputItem, {
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": auth_note}
+                ]
+            }))
+
+        if workflow_input.conversation_state:
+            cs = workflow_input.conversation_state or {}
+            state_parts: List[str] = []
+            if isinstance(cs, dict):
+                if cs.get("mode"):
+                    state_parts.append(f"MODE={cs.get('mode')}")
+                if cs.get("active_listing_id"):
+                    state_parts.append(f"ACTIVE_LISTING_ID={cs.get('active_listing_id')}")
+                if cs.get("last_intent"):
+                    state_parts.append(f"LAST_INTENT={cs.get('last_intent')}")
+            state_note = "[CONVERSATION_STATE] " + " | ".join(state_parts)
+            conversation_history.append(cast(TResponseInputItem, {
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": state_note}
                 ]
             }))
         
