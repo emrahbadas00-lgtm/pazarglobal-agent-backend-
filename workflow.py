@@ -1824,11 +1824,6 @@ CURRENT_REQUEST_USER_PHONE: Optional[str] = None
 # TODO: Replace with Redis/DB for production; this is in-memory for now
 USER_SAFE_MEDIA_STORE: Dict[str, List[str]] = {}
 
-# Session store for safe media paths (persists across messages within a session)
-# Format: {user_id: [safe_path1, safe_path2, ...]}
-# TODO: Replace with Redis/DB for production; this is in-memory for now
-USER_SAFE_MEDIA_STORE: Dict[str, List[str]] = {}
-
 
 # Main workflow runner
 async def run_workflow(workflow_input: WorkflowInput):
@@ -1973,6 +1968,11 @@ async def run_workflow(workflow_input: WorkflowInput):
                 continue
             seen_paths.add(sp)
             media_paths.append(sp)
+        
+        # HARD LIMIT: Maximum 10 photos per listing (abuse prevention)
+        if len(media_paths) > 10:
+            logger.warning(f"⚠️ User {user_id_key} tried to upload {len(media_paths)} photos, limiting to 10")
+            media_paths = media_paths[:10]
 
         safe_media_paths: List[str] = []
         blocked_media_paths: List[Dict[str, Any]] = []
