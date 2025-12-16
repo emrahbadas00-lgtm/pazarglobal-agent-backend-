@@ -150,8 +150,30 @@ async def run_agent_workflow(request: AgentRequest):
     if request.user_context and request.user_context.get("name"):
         user_name = request.user_context.get("name")
 
-    # If user_id looks like a phone number (starts with + or whatsapp:), resolve to UUID
-    if request.phone or (request.user_id and (request.user_id.startswith('+') or request.user_id.startswith('whatsapp:'))):
+    # AGGRESSIVE PHONE LOOKUP: 
+    # If user_id looks like a phone number (starts with + or whatsapp: or contains non-UUID chars), 
+    # OR if request.phone is provided, do profile lookup
+    needs_phone_lookup = False
+    
+    # Check if user_id is NOT a valid UUID (36 chars with hyphens)
+    if request.user_id and len(request.user_id) == 36 and request.user_id.count('-') == 4:
+        # Looks like UUID, use it
+        logger.info(f"✅ user_id is valid UUID format: {request.user_id}")
+    elif request.user_id and (request.user_id.startswith('+') or request.user_id.startswith('whatsapp:')):
+        # Definitely phone format
+        needs_phone_lookup = True
+        logger.info(f"🔍 user_id is phone format: {request.user_id}")
+    elif request.user_id and not request.user_id.startswith('web_'):
+        # Not UUID, not web_ prefix → assume phone
+        needs_phone_lookup = True
+        logger.info(f"⚠️ user_id doesn't look like UUID: {request.user_id}, treating as phone")
+    
+    # If explicit phone provided, always lookup
+    if request.phone:
+        needs_phone_lookup = True
+        logger.info(f"📞 Explicit phone provided: {request.phone}")
+    
+    if needs_phone_lookup:
         try:
             import httpx
             supabase_url = os.getenv("SUPABASE_URL")
@@ -170,8 +192,10 @@ async def run_agent_workflow(request: AgentRequest):
                 }
                 params = {"phone": f"eq.{clean_phone}", "select": "id,full_name,phone"}
                 
+                logger.info(f"🔍 DEBUG: Querying Supabase profiles with phone={clean_phone}")
                 resp = await client.get(profile_url, headers=headers, params=params)
-                logger.info(f"🔍 DEBUG: Profile lookup response status={resp.status_code}, data={resp.text[:200]}")
+                logger.info(f"🔍 DEBUG: Profile lookup response status={resp.status_code}, data={resp.text[:300]}")
+                
                 if resp.is_success and resp.json():
                     profile = resp.json()[0]
                     resolved_user_id = profile.get("id")  # ← UUID from profiles table
@@ -179,7 +203,7 @@ async def run_agent_workflow(request: AgentRequest):
                     user_phone = profile.get("phone")  # Store phone for listing
                     logger.info(f"✅ Resolved phone {clean_phone} → UUID: {resolved_user_id}, name: {user_name}, phone: {user_phone}")
                 else:
-                    logger.warning(f"⚠️ No profile found for phone: {clean_phone}")
+                    logger.warning(f"⚠️ No profile found for phone: {clean_phone}, keeping user_id as-is: {request.user_id}")
         except Exception as e:
             logger.error(f"❌ Error resolving user from phone: {str(e)}")
     
