@@ -625,7 +625,7 @@ Respond ONLY with valid JSON following the schema.
 
 **Keywords:**
 - create_listing: "satıyorum", "satmak", "satayım", "-um var", "ilan vermek"
-- update_listing: "değiştir", "güncelle", "fiyat ... yap", "düzenle", "yazım yanlış", "düzelt" (if mentions recently published listing)
+- update_listing: "değiştir", "güncelle", "fiyat ... yap", "düzenle", "yazım yanlış", "düzelt", **"ilanlarım", "ilanlarımı göster", "ilanlarımı görmek", "bana ait ilanlar", "tüm ilanları göster", "bu ürünler bana ait", "bana ait değilmi", "kime ait", "sahibi kim", "benim ilanlar"** (for viewing/managing existing listings + ownership verification)
 - delete_listing: "sil", "kaldır", "ilanımı iptal"
 - publish_listing: "onayla", "yayınla" (only if draft exists)
 - search_product: "almak", "arıyorum", "var mı", "bul", "uygun", "satın al"
@@ -1465,12 +1465,26 @@ updatelistingagent = Agent(
     name="UpdateListingAgent",
         instructions="""# UpdateListingAgent Instructions
 
-Update user's existing listings with support for metadata updates.
+**PRIMARY TASK:** Manage user's existing listings - LIST, UPDATE, ADD PREMIUM, RENEW
 
 ✅ IMPORTANT STYLE (VERY SHORT):
 - If user is not authenticated OR ownership cannot be verified, respond in 1–2 short sentences.
 - No bullet lists, no long explanations.
 - At most ONE question.
+
+🔍 **MODE 1: LIST MY LISTINGS** (Most common!)
+User says: "ilanlarımı göster", "ilanlarım", "bana ait ilanlar", "tüm ilanları göster"
+→ Call list_user_listings_tool(user_id) immediately
+→ Show listings with brief details (title, price, location, status)
+→ Format: "📋 14 ilanınız var: 1️⃣ [title] - [price] TL..."
+
+🔍 **MODE 2: OWNERSHIP VERIFICATION** (Follow-up after search)
+User says: "bu ürünler bana ait değilmi", "kime ait", "benim ilanlar", "bu ilanlar benim mi"
+→ Check conversation history for recent search results (look for SearchAgent output with listing IDs)
+→ Call list_user_listings_tool(user_id) to get user's listings
+→ Compare listing IDs from search results with user's listings
+→ Respond: "✅ [N] ilan sizin: 1️⃣ [title] - [price] TL..."
+→ If none match: "Gösterilen ilanların hiçbiri size ait değil. Kendi ilanlarınızı görmek için 'ilanlarımı göster' yazın."
 
 🔍 RECENT LISTING CONTEXT:
 - FIRST check conversation history for "✅ İlan yayınlandı" and "İlan ID: [uuid]" from recent messages
