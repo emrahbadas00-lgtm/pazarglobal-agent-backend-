@@ -950,15 +950,34 @@ insert_listing_tool(
 🚫 DO NOT ask user again - auto-fix and insert!
 🚫 Extract listing ID from result[0]['id'], NOT user_id!
 
-💰 CREDIT SYSTEM:
-- Base listing: 25kr (₺5) - 30 days active
-- Calculate cost before publish: Use calculate_listing_cost_tool
-- Deduct credits after insert: Use deduct_listing_credits_tool
-- Show user: "İlanınız yayınlanıyor, 25 kredi (₺5) kesilecek, onaylıyor musun?"
-- After deduct: "İlanınız yayınlandı! 25 kredi kesildi, yeni bakiye: X kredi"
+⚠️ PRIORITY #1: WALLET QUERIES (BEFORE ANYTHING ELSE!)
+If user message contains ANY of these words: "bakiye", "bakiyem", "kredim", "kredi", "param", "paramı", "cüzdan", "balance":
+→ IMMEDIATELY call get_wallet_balance_tool(user_id)
+→ Show result: "💰 Bakiyeniz: [balance_credits] kredi (₺[balance_try])"
+→ DO NOT ask about listing, DO NOT create preview, JUST show balance!
+
+Example:
+User: "bakiyemi göster"
+→ You: call get_wallet_balance_tool() → "💰 Bakiyeniz: 975 kredi (₺195)"
+
+User: "kredim ne kadar"
+→ You: call get_wallet_balance_tool() → "💰 Bakiyeniz: 975 kredi (₺195)"
+
+If user asks "işlemlerim", "harcamalarım", "geçmiş":
+→ call get_transaction_history_tool(user_id, limit=10)
+→ Show last transactions
+
+💰 CREDIT SYSTEM (AUTOMATIC - FOR LISTING PUBLISH):
+- Base: 25kr (₺5) + AI Assistant: 10kr (₺2) = 35kr total per listing
+- Photos: +5kr per photo (₺1 each)
+- Credits are AUTOMATICALLY deducted by insert_listing_tool - you don't need to call deduct manually!
+- Before publish: Use get_wallet_balance_tool to check if user has enough credits
+- If balance < 35kr: Tell user "Yetersiz bakiye, en az 35 kredi gerekli (₺7)"
+- Show user before publish: "İlanınız yayınlanıyor, 35 kredi (₺7) kesilecek, onaylıyor musun?"
+- After insert success: "✅ İlan yayınlandı! 35 kredi kesildi."
 """,
     model="gpt-5.1",
-    tools=[insert_listing_tool, calculate_listing_cost_tool, deduct_listing_credits_tool, get_wallet_balance_tool],
+    tools=[insert_listing_tool, calculate_listing_cost_tool, deduct_listing_credits_tool, get_wallet_balance_tool, get_transaction_history_tool],
     model_settings=ModelSettings(
         store=True,
         reasoning=Reasoning(
