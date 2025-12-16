@@ -174,16 +174,13 @@ async def insert_listing(
             
             if listing_id_created:
                 # Calculate actual cost based on usage
-                total_cost = 25  # Base listing cost (₺5)
+                total_cost = 50  # Base listing cost (₺10)
                 
-                # AI Assistant (WhatsApp conversation = always used)
-                total_cost += 10  # ₺2
-                
-                # Photo analysis (if photos uploaded)
+                # Vision safety check (1 call regardless of photo count)
                 if images and len(images) > 0:
-                    total_cost += 5 * len(images)  # ₺1 per photo
+                    total_cost += 5  # Vision safety check (₺1)
                 
-                print(f"💰 Deducting {total_cost} credits for listing (base 25kr + AI 10kr + {len(images) if images else 0} photos)...")
+                print(f"💰 Deducting {total_cost} credits for listing (base 50kr + {' vision 5kr' if images else 'no photos'})...")
                 deduct_result = deduct_credits(
                     user_id=user_id,
                     amount_credits=total_cost,
