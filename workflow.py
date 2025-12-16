@@ -126,7 +126,7 @@ async def clean_price_tool(price_text: Optional[str] = None) -> Dict[str, Option
 
 
 @function_tool
-async def get_wallet_balance_tool(user_id: str) -> Dict[str, Any]:
+async def get_wallet_balance_tool(user_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Kullanıcının cüzdan bakiyesini sorgula.
     
@@ -136,7 +136,10 @@ async def get_wallet_balance_tool(user_id: str) -> Dict[str, Any]:
     Returns:
         Bakiye bilgisi (credits ve TRY cinsinden)
     """
-    return get_wallet_balance(user_id)
+    resolved_user_id = CURRENT_REQUEST_USER_ID or user_id
+    if not resolved_user_id:
+        return {"success": False, "error": "Missing user_id (no authenticated user in workflow context)"}
+    return get_wallet_balance(resolved_user_id)
 
 
 @function_tool
@@ -171,7 +174,7 @@ async def calculate_listing_cost_tool(
 
 @function_tool
 async def deduct_listing_credits_tool(
-    user_id: str,
+    user_id: Optional[str],
     amount_credits: int,
     listing_id: str
 ) -> Dict[str, Any]:
@@ -186,8 +189,11 @@ async def deduct_listing_credits_tool(
     Returns:
         İşlem sonucu ve yeni bakiye
     """
+    resolved_user_id = CURRENT_REQUEST_USER_ID or user_id
+    if not resolved_user_id:
+        return {"success": False, "error": "Missing user_id (no authenticated user in workflow context)"}
     return deduct_credits(
-        user_id=user_id,
+        user_id=resolved_user_id,
         amount_credits=amount_credits,
         action="listing_publish",
         reference=listing_id
@@ -196,7 +202,7 @@ async def deduct_listing_credits_tool(
 
 @function_tool
 async def add_premium_badge_tool(
-    user_id: str,
+    user_id: Optional[str],
     listing_id: str,
     badge_type: str
 ) -> Dict[str, Any]:
@@ -211,8 +217,11 @@ async def add_premium_badge_tool(
     Returns:
         İşlem sonucu, rozet emoji, süre, kesilen kredi
     """
+    resolved_user_id = CURRENT_REQUEST_USER_ID or user_id
+    if not resolved_user_id:
+        return {"success": False, "error": "Missing user_id (no authenticated user in workflow context)"}
     return add_premium_to_listing(
-        user_id=user_id,
+        user_id=resolved_user_id,
         listing_id=listing_id,
         badge_type=badge_type
     )
@@ -220,7 +229,7 @@ async def add_premium_badge_tool(
 
 @function_tool
 async def renew_listing_tool(
-    user_id: str,
+    user_id: Optional[str],
     listing_id: str
 ) -> Dict[str, Any]:
     """
@@ -233,15 +242,18 @@ async def renew_listing_tool(
     Returns:
         İşlem sonucu, yeni bitiş tarihi
     """
+    resolved_user_id = CURRENT_REQUEST_USER_ID or user_id
+    if not resolved_user_id:
+        return {"success": False, "error": "Missing user_id (no authenticated user in workflow context)"}
     return renew_listing(
-        user_id=user_id,
+        user_id=resolved_user_id,
         listing_id=listing_id
     )
 
 
 @function_tool
 async def get_transaction_history_tool(
-    user_id: str,
+    user_id: Optional[str] = None,
     limit: int = 20
 ) -> Dict[str, Any]:
     """
@@ -254,8 +266,11 @@ async def get_transaction_history_tool(
     Returns:
         İşlem listesi
     """
+    resolved_user_id = CURRENT_REQUEST_USER_ID or user_id
+    if not resolved_user_id:
+        return {"success": False, "error": "Missing user_id (no authenticated user in workflow context)"}
     return get_transaction_history(
-        user_id=user_id,
+        user_id=resolved_user_id,
         limit=limit
     )
 
@@ -581,6 +596,7 @@ Respond ONLY with valid JSON following the schema.
 - **"delete_listing"** → user wants to DELETE/REMOVE existing listing
 - **"publish_listing"** → user CONFIRMS listing (wants to finalize and publish)
 - **"search_product"** → user wants to BUY or SEARCH
+- **"wallet_query"** → user asks about wallet balance/credits/transactions
 - **"small_talk"** → greetings, casual conversation
 - **"cancel"** → user cancels operation
 
@@ -613,6 +629,7 @@ Respond ONLY with valid JSON following the schema.
 - delete_listing: "sil", "kaldır", "ilanımı iptal"
 - publish_listing: "onayla", "yayınla" (only if draft exists)
 - search_product: "almak", "arıyorum", "var mı", "bul", "uygun", "satın al"
+- wallet_query: "bakiye", "bakiyem", "kredi", "kredim", "param", "cüzdan", "işlemlerim", "harcamalarım", "geçmiş"
 - small_talk: "merhaba", "selam", "teşekkür", "sohbet", "muhabbet", "kafa dağıt", "konuşalım", "gevez", "lafla", "ne görüyorsun"
 - cancel: "iptal", "vazgeç", "sıfırla"
 
@@ -1912,6 +1929,24 @@ async def run_workflow(workflow_input: WorkflowInput):
         if guardrails_hastripwire:
             return {"error": "Content blocked by guardrails"}
 
+        # Fast-path routing for wallet queries (avoid misclassification to small_talk)
+        raw_user_text = (workflow.get("input_as_text") or "").strip().lower()
+        wallet_keywords = (
+            "bakiye",
+            "bakiyem",
+            "kredi",
+            "kredim",
+            "param",
+            "paramı",
+            "cüzdan",
+            "balance",
+            "işlemlerim",
+            "harcamalarım",
+            "geçmiş",
+            "işlem geçmiş",
+        )
+        force_wallet_intent = any(k in raw_user_text for k in wallet_keywords)
+
         # Step 0: Vision safety + product extraction (if media provided)
         media_paths_raw = workflow.get("media_paths")
         media_paths: List[str] = media_paths_raw if isinstance(media_paths_raw, list) else ([] if media_paths_raw is None else [str(media_paths_raw)])
@@ -1983,23 +2018,26 @@ async def run_workflow(workflow_input: WorkflowInput):
             }))
         
         # Step 1: Classify intent
-        router_agent_intent_classifier_result_temp = await Runner.run(
-            router_agent_intent_classifier,
-            input=[*conversation_history],
-            run_config=RunConfig(trace_metadata={
-                "__trace_source__": "agent-builder",
-                "workflow_id": "wf_691884cc7e6081908974fe06852942af0249d08cf5054fdb"
-            })
-        )
-        
-        conversation_history.extend([item.to_input_item() for item in router_agent_intent_classifier_result_temp.new_items])
-        
-        router_agent_intent_classifier_result = {
-            "output_text": router_agent_intent_classifier_result_temp.final_output.json(),
-            "output_parsed": router_agent_intent_classifier_result_temp.final_output.model_dump()
-        }
-        
-        intent = router_agent_intent_classifier_result["output_parsed"]["intent"]
+        if force_wallet_intent:
+            intent = "wallet_query"
+        else:
+            router_agent_intent_classifier_result_temp = await Runner.run(
+                router_agent_intent_classifier,
+                input=[*conversation_history],
+                run_config=RunConfig(trace_metadata={
+                    "__trace_source__": "agent-builder",
+                    "workflow_id": "wf_691884cc7e6081908974fe06852942af0249d08cf5054fdb"
+                })
+            )
+            
+            conversation_history.extend([item.to_input_item() for item in router_agent_intent_classifier_result_temp.new_items])
+            
+            router_agent_intent_classifier_result = {
+                "output_text": router_agent_intent_classifier_result_temp.final_output.json(),
+                "output_parsed": router_agent_intent_classifier_result_temp.final_output.model_dump()
+            }
+            
+            intent = router_agent_intent_classifier_result["output_parsed"]["intent"]
         
         # Step 2: Route to appropriate agent
         # TEMPORARILY DISABLED pin_request - causing 500 errors
@@ -2032,6 +2070,16 @@ async def run_workflow(workflow_input: WorkflowInput):
                 })
             )
         elif intent == "publish_listing":
+            result = await Runner.run(
+                publishagent,
+                input=[*conversation_history],
+                run_config=RunConfig(trace_metadata={
+                    "__trace_source__": "agent-builder",
+                    "workflow_id": "wf_691884cc7e6081908974fe06852942af0249d08cf5054fdb"
+                })
+            )
+        elif intent == "wallet_query":
+            # Wallet queries must reach an agent that has wallet tools.
             result = await Runner.run(
                 publishagent,
                 input=[*conversation_history],

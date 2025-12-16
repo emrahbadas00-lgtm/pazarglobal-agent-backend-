@@ -1,7 +1,8 @@
 # tools/insert_listing.py
 
 import os
-from typing import Any, Dict, Optional, List
+import re
+from typing import Any, Dict, Optional, List, cast
 
 import httpx
 from .suggest_category import suggest_category
@@ -115,7 +116,8 @@ async def insert_listing(
     # Align category with metadata (e.g., vehicle => Otomotiv)
     category = normalize_category_with_metadata(category, metadata)
 
-    url = f"{SUPABASE_URL}/rest/v1/listings"
+    # Only select id to keep response small but reliable (needed for wallet deduction reference)
+    url = f"{SUPABASE_URL}/rest/v1/listings?select=id"
 
     payload: Dict[str, Any] = {
         "user_id": user_id,
@@ -165,13 +167,22 @@ async def insert_listing(
             data = resp.text
 
         # 💰 AUTO-DEDUCT CREDITS ON SUCCESSFUL LISTING
-        if resp.is_success and data:
-            listing_id_created = None
-            if isinstance(data, list) and len(data) > 0:
-                listing_id_created = data[0].get("id")
-            elif isinstance(data, dict):
-                listing_id_created = data.get("id")
-            
+        wallet_deduction: Optional[Dict[str, Any]] = None
+        if resp.is_success:
+            # Try to resolve listing id from (1) provided listing_id, (2) response JSON, (3) response headers
+            listing_id_created: Optional[str] = listing_id
+            if not listing_id_created:
+                if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+                    listing_id_created = cast(Optional[str], data[0].get("id"))
+                elif isinstance(data, dict):
+                    listing_id_created = cast(Optional[str], data.get("id"))
+
+            if not listing_id_created:
+                location = resp.headers.get("content-location") or resp.headers.get("location") or ""
+                match = re.search(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", location)
+                if match:
+                    listing_id_created = match.group(0)
+
             if listing_id_created:
                 # Calculate actual cost based on usage
                 total_cost = 50  # Base listing cost (₺10)
@@ -187,17 +198,27 @@ async def insert_listing(
                     action="listing_publish",
                     reference=listing_id_created
                 )
+                wallet_deduction = {
+                    "attempted": True,
+                    "amount_credits": total_cost,
+                    "listing_id": listing_id_created,
+                    "result": deduct_result,
+                }
                 
                 if deduct_result["success"]:
                     print(f"✅ Credits deducted! New balance: {deduct_result['new_balance_credits']}kr (₺{deduct_result['new_balance_credits'] * 0.20})")
                 else:
                     print(f"⚠️ Credit deduction failed: {deduct_result.get('error')}")
                     # Still return success for listing (credit issue shouldn't block listing)
+            else:
+                print("⚠️ Could not resolve listing_id from insert response; skipping wallet deduction.")
+                wallet_deduction = {"attempted": False, "error": "missing_listing_id"}
 
         return {
             "success": resp.is_success,
             "status": resp.status_code,
             "result": data,
+            "wallet_deduction": wallet_deduction,
         }
     except httpx.TimeoutException as e:
         print(f"⏱️ Timeout error: {str(e)}")

@@ -27,7 +27,9 @@ from datetime import datetime, timedelta
 def get_supabase_client() -> Client:
     """Get authenticated Supabase client"""
     supabase_url = os.getenv("SUPABASE_URL")
-    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    # Prefer Service Role Key, but fall back to SUPABASE_SERVICE_KEY for deployments
+    # that only provide a single service key env var.
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SERVICE_KEY")
     
     if not supabase_url or not supabase_key:
         raise Exception("Supabase credentials not configured")
