@@ -202,38 +202,19 @@ async def search_listings(
             unique_paths = list(dict.fromkeys(all_paths))
             signed_map = await generate_signed_urls(unique_paths)
 
-        # Fetch user info for all listings in one request
-        user_ids = [item.get("user_id") for item in data if isinstance(item, dict) and item.get("user_id")]
-        user_map = {}
+        # PERFORMANCE OPTIMIZATION: listings table already has user_name and user_phone (denormalized)
+        # No need to fetch from profiles table - use existing fields directly!
         
-        if user_ids:
-            # Batch fetch profiles
-            profiles_url = f"{SUPABASE_URL}/rest/v1/profiles"
-            profiles_params = {"id": f"in.({','.join(user_ids)})", "select": "id,full_name,phone"}
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    profiles_resp = await client.get(profiles_url, params=profiles_params, headers=headers)
-                    if profiles_resp.is_success:
-                        for profile in profiles_resp.json():
-                            user_map[profile["id"]] = profile
-            except Exception:
-                pass  # Continue without user info if fetch fails
-        
-        # Attach user info and signed URLs per listing
+        # Attach owner info and signed URLs per listing
         for item in data:
             if not isinstance(item, dict):
                 continue
             
-            # Get user info from map
-            user_id = item.get("user_id")
-            user_obj = user_map.get(user_id) if user_id else None
+            # Get user info directly from listings table (denormalized fields)
+            owner_name = item.get("user_name")
+            owner_phone = item.get("user_phone")
             
-            # Set user_* and owner_* fields for backward compatibility
-            owner_name = user_obj.get("full_name") if user_obj else None
-            owner_phone = user_obj.get("phone") if user_obj else None
-            
-            item["user_name"] = owner_name
-            item["user_phone"] = owner_phone
+            # Set owner_* fields for backward compatibility (both user_* and owner_* exist)
             item["owner_name"] = owner_name
             item["owner_phone"] = owner_phone
 
