@@ -317,32 +317,29 @@ async def web_chat_endpoint(request: AgentRequest):
             try:
                 # Run workflow
                 logger.info(f"📚 Web conversation history: {len(request.conversation_history)} messages")
-                # Build auth context note for the agent
-                auth_note_parts = [
-                    f"user_id={request.user_id}",
-                    f"name={profile_full_name or (request.user_context.get('name') if request.user_context else '')}",
-                    f"email={(request.user_context.get('email') if request.user_context else '')}",
-                    f"phone={user_phone or (request.user_context.get('phone') if request.user_context else '')}",
-                    f"owned_listing_ids={owned_listing_ids}"
-                ]
-                auth_note = "[AUTH_CONTEXT] " + " | ".join(filter(None, auth_note_parts)) + " | KURAL: Sadece owned_listing_ids listesindeki ilanlar üzerinde güncelle/sil yap. Diğer ilanlara sadece görüntüleme izni var."
-
-                enriched_history = request.conversation_history + [
-                    {
-                        "role": "assistant",
-                        "content": auth_note
-                    }
-                ]
+                # Build auth_context and conversation_state for protected intents
+                auth_context = {
+                    "user_id": request.user_id,
+                    "phone": user_phone or (request.user_context.get("phone") if request.user_context else None),
+                    "authenticated": True,
+                    "session_expires_at": None,
+                }
+                conversation_state = {
+                    "mode": "web",
+                    "active_listing_id": request.draft_listing_id,
+                }
 
                 workflow_input = WorkflowInput(
                     input_as_text=request.message,
-                    conversation_history=enriched_history,
+                    conversation_history=request.conversation_history,
                     media_paths=request.media_paths,
                     media_type=request.media_type,
                     draft_listing_id=request.draft_listing_id,
                     user_name=profile_full_name,
                     user_id=request.user_id,
                     user_phone=user_phone,  # Pass user phone
+                    auth_context=auth_context,
+                    conversation_state=conversation_state,
                 )
                 result = await run_workflow(workflow_input)
                 
