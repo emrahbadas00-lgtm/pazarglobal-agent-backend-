@@ -654,14 +654,10 @@ Respond with JSON only: {"intent": "create_listing"}
 - Separate list items with commas: "İlan ver, ürün ara, yardım al"
 - Keep sentences short (max 15 words) for better voice clarity
 """,
-    model="gpt-5.1",
+    model="gpt-4o",
     output_type=RouterAgentIntentClassifierSchema,
     model_settings=ModelSettings(
-        store=True,
-        reasoning=Reasoning(
-            effort="medium",
-            summary="auto"
-        )
+        store=True
     )
 )
 
@@ -871,14 +867,10 @@ Show batch question again: "**[Field1] – [Field2] – [Field3]**\nÖrnek: ..."
 🚫 NO "isterseniz şunu yapalım" - just collect → generate → confirm!
 
 Store prepared listing in context for PublishAgent.""",
-    model="gpt-5.1",
+    model="gpt-4o",
     tools=[clean_price_tool],
     model_settings=ModelSettings(
-        store=True,
-        reasoning=Reasoning(
-            effort="low",
-            summary="auto"
-        )
+        store=True
     )
 )
 
@@ -996,14 +988,10 @@ If user asks "işlemlerim", "harcamalarım", "geçmiş":
 - Show user before publish: "İlanınız yayınlanıyor, [50 or 55]kr kesilecek, onaylıyor musun?"
 - After insert success: "✅ İlan yayınlandı! [amount]kr kesildi."
 """,
-    model="gpt-5.1",
+    model="gpt-4o-mini",
     tools=[insert_listing_tool, calculate_listing_cost_tool, deduct_listing_credits_tool, get_wallet_balance_tool, get_transaction_history_tool],
     model_settings=ModelSettings(
-        store=True,
-        reasoning=Reasoning(
-            effort="low",
-            summary="auto"
-        )
+        store=True
     )
 )
 
@@ -1465,14 +1453,10 @@ When user asks for price estimate: "bu ürünün fiyatı ne olmalı", "fiyat ön
 - If market_price_tool returns error (no similar products) → Only show site average
 - Always explain which data source is more reliable
 - Use similarity_threshold=0.5 for market_price_tool""",
-    model="gpt-5.1",
+    model="gpt-4o-mini",
     tools=[search_listings_tool, market_price_tool],
     model_settings=ModelSettings(
-        store=True,
-        reasoning=Reasoning(
-            effort="low",
-            summary="auto"
-        )
+        store=True
     )
 )
 
@@ -1563,14 +1547,10 @@ Tools available:
 - get_wallet_balance_tool
 
 NEVER use insert_listing_tool!""",
-    model="gpt-5.1",
+    model="gpt-4o",
     tools=[update_listing_tool, list_user_listings_tool, clean_price_tool, add_premium_badge_tool, renew_listing_tool, get_wallet_balance_tool],
     model_settings=ModelSettings(
-        store=True,
-        reasoning=Reasoning(
-            effort="low",
-            summary="auto"
-        )
+        store=True
     )
 )
 
@@ -1654,13 +1634,9 @@ Reply pattern:
 - Overly formal, salesy tone.
 
 🚫 No tools needed.""",
-    model="gpt-5.1",
+    model="gpt-4o-mini",
     model_settings=ModelSettings(
-        store=True,
-        reasoning=Reasoning(
-            effort="low",
-            summary="auto"
-        )
+        store=True
     )
 )
 
@@ -1684,13 +1660,9 @@ Yeni bir işlem için:
 - Keep tone friendly and clear
 
 🚫 No tools needed.""",
-    model="gpt-5.1",
+    model="gpt-4.1-mini",
     model_settings=ModelSettings(
-        store=True,
-        reasoning=Reasoning(
-            effort="low",
-            summary="auto"
-        )
+        store=True
     )
 )
 
@@ -1790,14 +1762,10 @@ ALWAYS ask confirmation before deleting!
 Tools:
 - list_user_listings_tool
 - delete_listing_tool""",
-    model="gpt-5.1",
+    model="gpt-4o-mini",
     tools=[delete_listing_tool, list_user_listings_tool],
     model_settings=ModelSettings(
-        store=True,
-        reasoning=Reasoning(
-            effort="low",
-            summary="auto"
-        )
+        store=True
     )
 )
 
