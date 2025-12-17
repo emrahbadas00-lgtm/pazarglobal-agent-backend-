@@ -31,6 +31,9 @@ def normalize_category_with_metadata(category: Optional[str], metadata: Optional
     }
     
     if meta_type and meta_type in type_to_category:
+        # Keep user-provided category when meta_type is very generic
+        if meta_type == "general" and category:
+            return category
         return type_to_category[meta_type]
     
     return category
@@ -165,6 +168,9 @@ async def insert_listing(
             data = resp.json()
         except Exception:
             data = resp.text
+
+        if not resp.is_success:
+            print(f"❌ Insert failed body: {data}")
 
         # 💰 AUTO-DEDUCT CREDITS ON SUCCESSFUL LISTING
         wallet_deduction: Optional[Dict[str, Any]] = None

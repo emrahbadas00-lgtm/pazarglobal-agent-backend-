@@ -4,6 +4,15 @@
 
 Modern AI destekli ilan platformu PazarGlobal'in ana backend servisi. OpenAI Agents SDK kullanarak çok-ajanlı (multi-agent) mimari ile kullanıcı isteklerini işler, ilanları yönetir ve akıllı sohbet deneyimi sağlar.
 
+> 🚧 Deneme: Bu sürümde WhatsApp ilan akışı için guardrails-first + deterministik FSM (draft → preview → publish) kurgusu aktif. Geri dönüş için son stabil commit: `deb267473299ab11cd33ac32c3b1bf6ec031cba8`.
+
+## 📌 Son Değişiklik Özeti (18 Dec 2025)
+- Aktif taslaklar Supabase `active_drafts` tablosuna kalıcı yazılıyor; draft state, images, vision snapshot saklanıyor.
+- FSM yayın hataları artık detaylı döndürülüyor; condition normalizasyonu (new/used/refurbished) eklendi.
+- Lokasyon varsayılan Türkiye, stok varsayılan 1, metadata daima `type` içeriyor; vision attribute’ları metadata’ya birleşiyor.
+- Fotoğraflı akış test edildi (Citroën SUV örneği): vision brand/color/type eklendi, kategori düzeltmesi yapıldı, kredi kesimi çalıştı.
+- SmallTalkAgent sandboxlandı: intent/tool/state karar vermiyor, sadece örnek komut gösteriyor ("iphone 14 arıyorum", "ilan ver", "onayla", "daha fazla ilan göster", "1 nolu ilanı göster" vb.).
+
 ---
 
 ## 📋 İçindekiler
