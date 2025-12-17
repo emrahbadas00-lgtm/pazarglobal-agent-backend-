@@ -397,6 +397,46 @@ def _build_metadata(draft: DraftState, vision_product: Optional[Dict[str, Any]])
 
     return metadata
 
+
+def _wants_description_suggestion(text: Optional[str]) -> bool:
+    """Detect if user explicitly asks for a description suggestion."""
+    lowered = (text or "").lower()
+    triggers = [
+        "açıklama öner",
+        "açıklama yaz",
+        "detaylı açıklama",
+        "metin öner",
+        "description öner",
+        "ilan açıklaması",
+        "güzel detaylı",
+    ]
+    return any(t in lowered for t in triggers)
+
+
+def _build_description_suggestion(draft: DraftState) -> str:
+    """Deterministic, LLM-free description suggestion based on current draft fields."""
+    title = draft.title or "Ürün"
+    condition_display = _condition_display(_normalize_condition_value(draft.condition)) or "Kullanılmış"
+    location = draft.location or "Türkiye"
+    price_text = f"Fiyat: {draft.price} TL." if draft.price else "Fiyat bilgisi ekleyebilirsiniz."
+
+    meta = draft.metadata or {}
+    attrs: List[str] = []
+    for key in ("brand", "model", "color", "storage", "year", "type", "category"):
+        val = meta.get(key)
+        if val:
+            attrs.append(str(val))
+
+    highlight = f"Öne çıkanlar: {', '.join(attrs)}." if attrs else "Öne çıkanlar: temiz kullanım, sorunsuz çalışır."
+
+    sentences = [
+        f"{title} {condition_display} durumda, {location} teslim/inceleme için hazır.",
+        price_text,
+        highlight,
+        "Bakımları yapıldı, alıcı isterse ekspertiz yaptırabilir."
+    ]
+    return " ".join(sentences)
+
 # Native function tool definitions (plain Python async functions)
 @function_tool
 async def clean_price_tool(price_text: Optional[str] = None) -> Dict[str, Optional[int]]:
@@ -2382,12 +2422,19 @@ async def handle_listing_fsm(
         if update.get("price") is not None:
             update["price"] = _normalize_price_value(update.get("price"))
         draft.apply_update(update)
+
+        # Optional: user asked for a richer description suggestion
+        if _wants_description_suggestion(user_text):
+            draft.description = _build_description_suggestion(draft)
+
         # Ensure defaults for persisted draft
         draft.stock = draft.stock if draft.stock is not None else 1
         draft.metadata = _build_metadata(draft, vision_product)
         draft.state = ListingState.PREVIEW if intent == "create_listing" else ListingState.EDIT
         await db_upsert_active_draft(draft)
         preview = draft.as_preview_text()
+        if _wants_description_suggestion(user_text):
+            preview += "\n\n✏️ Açıklamayı değiştirmek için: 'açıklamayı ... yap' yazabilirsiniz."
         return {
             "response": preview,
             "intent": "create_listing",
