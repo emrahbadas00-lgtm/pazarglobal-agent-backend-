@@ -45,38 +45,21 @@ async def delete_listing(listing_id: str, user_id: Optional[str] = None) -> dict
     url = f"{SUPABASE_URL}/rest/v1/listings"
     
     try:
-        # Ownership check: ensure listing belongs to user_id
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            ownership_resp = await client.get(
-                f"{url}?id=eq.{listing_id}&select=id,user_id",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}"
-                }
-            )
-            if ownership_resp.is_success and ownership_resp.json():
-                owner = ownership_resp.json()[0].get("user_id")
-                if owner and owner != user_id:
-                    return {
-                        "success": False,
-                        "status_code": 403,
-                        "error": "Bu ilan size ait değil. Başkasının ilanını silemezsiniz."
-                    }
-            else:
-                return {
-                    "success": False,
-                    "status_code": ownership_resp.status_code,
-                    "error": "İlan bulunamadı veya erişim hatası"
-                }
-
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            # Supabase delete with filter: DELETE /listings?id=eq.{listing_id}
+            # Single-call delete with ownership filter
             response = await client.delete(
-                f"{url}?id=eq.{listing_id}",
+                f"{url}?id=eq.{listing_id}&user_id=eq.{user_id}",
                 headers=headers
             )
-            
+
             if response.status_code in [200, 204]:
+                result = response.json() if response.text else []
+                if not result:
+                    return {
+                        "success": False,
+                        "status_code": 404,
+                        "error": "İlan bulunamadı veya size ait değil"
+                    }
                 return {
                     "success": True,
                     "status_code": response.status_code,
