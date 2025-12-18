@@ -217,8 +217,9 @@ def _extract_listing_number(text: str) -> Optional[int]:
         return None
     lowered = text.lower()
     patterns = [
-        r"\b(\d{1,3})\s*(?:nolu|no\.?|numaralı)\s*ilan\b",
+        r"\b(\d{1,3})\s*(?:[\.,]\s*)?(?:inci|ıncı|nci|ncı|uncu|üncü)?\s*ilan\b",  # "5. ilan" / "3üncü ilan"
         r"\bilan\s*#?\s*(\d{1,3})\b",
+        r"\b(\d{1,3})\s*(?:nolu|no\.?|numaralı)\s*ilan\b",
         r"\b#\s*(\d{1,3})\b",
     ]
     for pat in patterns:
@@ -2680,41 +2681,54 @@ async def run_workflow(workflow_input: WorkflowInput):
         wants_detail = requested_num is not None and any(k in raw_user_text_l for k in ("göster", "goster", "detay"))
         if wants_detail:
             last = _get_last_results_for_user(resolve_user_id(user_id_key), resolve_user_phone())
-            idx = (requested_num or 1) - 1
-            if 0 <= idx < len(last):
-                item = last[idx] or {}
-                title = item.get("title") or "İlan"
-                price = item.get("price")
-                location = item.get("location") or "Türkiye"
-                condition = _condition_display(_normalize_condition_value(item.get("condition"))) or "Belirtilmedi"
-                category = item.get("category") or "Genel"
-                owner_name = item.get("user_name") or item.get("owner_name")
-                owner_phone = item.get("user_phone") or item.get("owner_phone") or resolve_user_phone()
-                description = item.get("description") or "Açıklama yok."
-                if len(description) > 400:
-                    description = description[:400] + "..."
-                images = item.get("signed_images") or []
-                photos = [str(u) for u in images if u]
-                photos_text = "Fotoğraf yok." if not photos else "Fotoğraflar:\n" + "\n".join(photos[:3])
-                owner_line = ""
-                if owner_name or owner_phone:
-                    owner_line = f"İlan sahibi: {owner_name or 'Bilinmiyor'}" + (f" | Telefon: {owner_phone}" if owner_phone else "")
-
-                detail_text = (
-                    f"{title}\n\n"
-                    f"Fiyat: {price if price is not None else 'Belirtilmedi'} TL\n"
-                    f"Konum: {location}\n"
-                    f"Durum: {condition}\n"
-                    f"Kategori: {category}\n"
-                    f"{owner_line}\n\n"
-                    f"Açıklama: {description}\n\n"
-                    f"{photos_text}"
-                )
+            if not last:
                 return {
-                    "response": detail_text,
+                    "response": "Henüz listelenmiş bir arama sonucu yok. Önce arama yapalım (örn: 'araba var mı?').",
                     "intent": "search_product",
-                    "success": True,
+                    "success": False,
                 }
+
+            idx = (requested_num or 1) - 1
+            if idx < 0 or idx >= len(last):
+                return {
+                    "response": f"Bu aramada sadece {len(last)} ilan var. 1-{len(last)} arasından seçim yapabilirsiniz.",
+                    "intent": "search_product",
+                    "success": False,
+                }
+
+            item = last[idx] or {}
+            title = item.get("title") or "İlan"
+            price = item.get("price")
+            location = item.get("location") or "Türkiye"
+            condition = _condition_display(_normalize_condition_value(item.get("condition"))) or "Belirtilmedi"
+            category = item.get("category") or "Genel"
+            owner_name = item.get("user_name") or item.get("owner_name")
+            owner_phone = item.get("user_phone") or item.get("owner_phone") or resolve_user_phone()
+            description = item.get("description") or "Açıklama yok."
+            if len(description) > 400:
+                description = description[:400] + "..."
+            images = item.get("signed_images") or []
+            photos = [str(u) for u in images if u]
+            photos_text = "Fotoğraf yok." if not photos else "Fotoğraflar:\n" + "\n".join(photos[:3])
+            owner_line = ""
+            if owner_name or owner_phone:
+                owner_line = f"İlan sahibi: {owner_name or 'Bilinmiyor'}" + (f" | Telefon: {owner_phone}" if owner_phone else "")
+
+            detail_text = (
+                f"{title}\n\n"
+                f"Fiyat: {price if price is not None else 'Belirtilmedi'} TL\n"
+                f"Konum: {location}\n"
+                f"Durum: {condition}\n"
+                f"Kategori: {category}\n"
+                f"{owner_line}\n\n"
+                f"Açıklama: {description}\n\n"
+                f"{photos_text}"
+            )
+            return {
+                "response": detail_text,
+                "intent": "search_product",
+                "success": True,
+            }
 
         # Inject last search results summary when it can help follow-up actions
         raw_user_text_l = raw_user_text_full.strip().lower()
