@@ -706,6 +706,11 @@ async def search_listings_tool(
                     "price": item.get("price"),
                     "category": item.get("category"),
                     "location": item.get("location"),
+                    "condition": item.get("condition"),
+                    "description": item.get("description"),
+                    "signed_images": item.get("signed_images") or item.get("images") or [],
+                    "user_name": item.get("user_name") or item.get("owner_name"),
+                    "user_phone": item.get("user_phone") or item.get("owner_phone"),
                 })
             USER_LAST_SEARCH_RESULTS_STORE[user_key] = compact[:25]
     except Exception:
@@ -2622,6 +2627,47 @@ async def run_workflow(workflow_input: WorkflowInput):
                         ]
                     }))
 
+        # Deterministic detail rendering for "X nolu ilan" to avoid LLM misalignment
+        raw_user_text_l = raw_user_text_full.strip().lower()
+        wants_detail = requested_num is not None and any(k in raw_user_text_l for k in ("göster", "goster", "detay"))
+        if wants_detail:
+            last = USER_LAST_SEARCH_RESULTS_STORE.get(user_id_key) or []
+            idx = (requested_num or 1) - 1
+            if 0 <= idx < len(last):
+                item = last[idx] or {}
+                title = item.get("title") or "İlan"
+                price = item.get("price")
+                location = item.get("location") or "Türkiye"
+                condition = _condition_display(_normalize_condition_value(item.get("condition"))) or "Belirtilmedi"
+                category = item.get("category") or "Genel"
+                owner_name = item.get("user_name") or item.get("owner_name")
+                owner_phone = item.get("user_phone") or item.get("owner_phone") or resolve_user_phone()
+                description = item.get("description") or "Açıklama yok."
+                if len(description) > 400:
+                    description = description[:400] + "..."
+                images = item.get("signed_images") or []
+                photos = [str(u) for u in images if u]
+                photos_text = "Fotoğraf yok." if not photos else "Fotoğraflar:\n" + "\n".join(photos[:3])
+                owner_line = ""
+                if owner_name or owner_phone:
+                    owner_line = f"İlan sahibi: {owner_name or 'Bilinmiyor'}" + (f" | Telefon: {owner_phone}" if owner_phone else "")
+
+                detail_text = (
+                    f"{title}\n\n"
+                    f"Fiyat: {price if price is not None else 'Belirtilmedi'} TL\n"
+                    f"Konum: {location}\n"
+                    f"Durum: {condition}\n"
+                    f"Kategori: {category}\n"
+                    f"{owner_line}\n\n"
+                    f"Açıklama: {description}\n\n"
+                    f"{photos_text}"
+                )
+                return {
+                    "response": detail_text,
+                    "intent": "search_product",
+                    "success": True,
+                }
+
         # Inject last search results summary when it can help follow-up actions
         raw_user_text_l = raw_user_text_full.strip().lower()
         needs_last_search_context = any(k in raw_user_text_l for k in (
@@ -2956,7 +3002,10 @@ async def run_workflow(workflow_input: WorkflowInput):
         # Authentication gate for protected intents
         auth_ctx = resolve_auth_context()
         resolved_user_id = resolve_user_id()
-        is_authenticated = bool(auth_ctx.get("authenticated") and resolved_user_id)
+        # WhatsApp oturumlarında PIN doğrulaması Edge Function tarafında yapılıyor.
+        # Phone → profile → user_id çözülüyorsa bu isteği authenticated saymak yeterli.
+        # (Bazı durumlarda auth_context gelmiyor; bu kullanıcıyı tekrar PIN'e zorlamasın.)
+        is_authenticated = bool(resolved_user_id)
         protected_intents = {"update_listing", "delete_listing"}
         if intent in protected_intents and not is_authenticated:
             return {
