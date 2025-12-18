@@ -736,6 +736,14 @@ async def search_listings_tool(
                 USER_LAST_SEARCH_RESULTS_STORE[phone_key] = compact[:25]
             if user_key != "anonymous" and "anonymous" in USER_LAST_SEARCH_RESULTS_STORE and not USER_LAST_SEARCH_RESULTS_STORE.get("anonymous"):
                 USER_LAST_SEARCH_RESULTS_STORE["anonymous"] = compact[:25]
+
+            # To avoid photo links in list view, strip signed_images/images before returning to agent (detail uses cached copy).
+            for item in cast(List[Any], result.get("results") or []):
+                if isinstance(item, dict):
+                    if "signed_images" in item:
+                        item["signed_images"] = []
+                    if "images" in item:
+                        item["images"] = []
     except Exception:
         pass
 
