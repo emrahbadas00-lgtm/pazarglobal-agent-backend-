@@ -681,6 +681,7 @@ async def search_listings_tool(
     max_price: Optional[int] = None,
     limit: int = 10,
     metadata_type: Optional[str] = None,
+    exclude_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Supabase'den ilan arar.
@@ -694,6 +695,7 @@ async def search_listings_tool(
         max_price: Maximum fiyat
         limit: Sonuç sayısı limiti
         metadata_type: Metadata type filter
+        exclude_user_id: Bu user_id'ye ait ilanları hariç tut (örn: "bana ait olmayan ilanlar")
     """
     result = await search_listings(
         query=query,
@@ -703,7 +705,8 @@ async def search_listings_tool(
         min_price=min_price,
         max_price=max_price,
         limit=limit,
-        metadata_type=metadata_type
+        metadata_type=metadata_type,
+        exclude_user_id=exclude_user_id
     )
 
     # Persist last search results per user so follow-ups like "1 nolu ilan" stay deterministic

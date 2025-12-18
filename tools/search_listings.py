@@ -70,6 +70,7 @@ async def search_listings(
     metadata_type: Optional[str] = None,
     room_count: Optional[str] = None,  # NEW: Direct metadata filter (e.g., "3+1")
     property_type: Optional[str] = None,  # NEW: Direct metadata filter (e.g., "dubleks")
+    exclude_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Supabase'den ilan arama.
@@ -86,6 +87,7 @@ async def search_listings(
         metadata_type: Metadata type filter ("vehicle", "part", "property")
         room_count: Room count filter (e.g., "3+1") - searches in metadata->>'room_count'
         property_type: Property type filter (e.g., "dubleks") - searches in metadata->>'property_type'
+        exclude_user_id: Bu user_id'ye ait ilanları hariç tut (örn: "bana ait olmayan ilanlar")
         
     Returns:
         İlan listesi veya hata mesajı
@@ -167,6 +169,9 @@ async def search_listings(
         else:
             # No query, just search property_type in title, description, and metadata
             params["or"] = f"(title.ilike.*{property_type}*,description.ilike.*{property_type}*,metadata->>property_type.ilike.*{property_type}*)"
+
+    if exclude_user_id:
+        params["user_id"] = f"neq.{exclude_user_id}"
 
     headers = {
         "apikey": SUPABASE_SERVICE_KEY,
