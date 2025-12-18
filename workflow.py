@@ -2935,8 +2935,8 @@ async def run_workflow(workflow_input: WorkflowInput):
             # Deterministic FSM override: if active draft exists, keep user in draft loop unless explicitly publishing
             resolved_user_for_draft = resolve_user_id(user_id_key)
             active_draft = await db_get_active_draft(resolved_user_for_draft)
-            if active_draft and intent != "publish_listing":
-                # Stay in deterministic draft loop for any non-publish intent
+            if active_draft and intent not in {"publish_listing", "cancel"}:
+                # Stay in deterministic draft loop for any non-publish, non-cancel intent
                 intent = "update_listing_draft"
 
             # Deterministic state machine handles draft → preview → publish without tool-calling agents
