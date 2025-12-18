@@ -119,6 +119,23 @@ def _resolve_public_image_url(path: str) -> str:
     return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_PUBLIC_BUCKET}/{path.lstrip('/')}"
 
 
+def _get_last_results_for_user(user_id: Optional[str], phone: Optional[str]) -> List[Dict[str, Any]]:
+    """Return last search results with graceful fallbacks (user_id → phone → anonymous)."""
+    if user_id and user_id in USER_LAST_SEARCH_RESULTS_STORE:
+        return USER_LAST_SEARCH_RESULTS_STORE.get(user_id) or []
+    if phone and phone in USER_LAST_SEARCH_RESULTS_STORE:
+        return USER_LAST_SEARCH_RESULTS_STORE.get(phone) or []
+    return USER_LAST_SEARCH_RESULTS_STORE.get("anonymous") or []
+
+
+def _set_active_listing_for_keys(listing_id: str, keys: List[str]) -> None:
+    """Persist active listing id for multiple keys to survive auth-context gaps."""
+    for key in keys:
+        if not key:
+            continue
+        USER_ACTIVE_LISTING_STORE[key] = listing_id
+
+
 @dataclass
 class WorkflowContext:
     """İstek başına oturum ve kimlik bilgilerini taşır."""
@@ -692,6 +709,7 @@ async def search_listings_tool(
     # Persist last search results per user so follow-ups like "1 nolu ilan" stay deterministic
     try:
         user_key = resolve_user_id() or "anonymous"
+        phone_key = resolve_user_phone()
         if isinstance(result, dict) and result.get("success") and isinstance(result.get("results"), list):
             compact: List[Dict[str, Any]] = []
             for item in cast(List[Any], result.get("results") or []):
@@ -712,7 +730,12 @@ async def search_listings_tool(
                     "user_name": item.get("user_name") or item.get("owner_name"),
                     "user_phone": item.get("user_phone") or item.get("owner_phone"),
                 })
+            # Store under multiple keys so later authenticated requests can reuse cached list
             USER_LAST_SEARCH_RESULTS_STORE[user_key] = compact[:25]
+            if phone_key:
+                USER_LAST_SEARCH_RESULTS_STORE[phone_key] = compact[:25]
+            if user_key != "anonymous" and "anonymous" in USER_LAST_SEARCH_RESULTS_STORE and not USER_LAST_SEARCH_RESULTS_STORE.get("anonymous"):
+                USER_LAST_SEARCH_RESULTS_STORE["anonymous"] = compact[:25]
     except Exception:
         pass
 
@@ -760,7 +783,7 @@ async def update_listing_tool(
         # Try mapping from last search results: "1 nolu ilan" → stored result id
         num = _extract_listing_number(listing_id_candidate)
         if num is not None:
-            last = USER_LAST_SEARCH_RESULTS_STORE.get(resolved_user_id) or []
+            last = _get_last_results_for_user(resolved_user_id, resolve_user_phone())
             idx = num - 1
             if 0 <= idx < len(last):
                 mapped_id = last[idx].get("id")
@@ -774,9 +797,12 @@ async def update_listing_tool(
         if active and _is_uuid(str(active)):
             listing_id_candidate = str(active)
         else:
-            active_store = USER_ACTIVE_LISTING_STORE.get(resolved_user_id)
-            if active_store and _is_uuid(str(active_store)):
-                listing_id_candidate = str(active_store)
+            # fall back across user_id, phone, anonymous to survive auth gaps
+            for key in (resolved_user_id, resolve_user_phone(), "anonymous"):
+                active_store = USER_ACTIVE_LISTING_STORE.get(key)
+                if active_store and _is_uuid(str(active_store)):
+                    listing_id_candidate = str(active_store)
+                    break
 
     if not _is_uuid(listing_id_candidate):
         return {
@@ -2612,12 +2638,13 @@ async def run_workflow(workflow_input: WorkflowInput):
         raw_user_text_full = (workflow.get("input_as_text") or "")
         requested_num = _extract_listing_number(raw_user_text_full)
         if requested_num is not None:
-            last = USER_LAST_SEARCH_RESULTS_STORE.get(user_id_key) or []
+            last = _get_last_results_for_user(resolve_user_id(user_id_key), resolve_user_phone())
             idx = requested_num - 1
             if 0 <= idx < len(last):
                 mapped_id = last[idx].get("id")
                 if mapped_id and _is_uuid(str(mapped_id)):
-                    USER_ACTIVE_LISTING_STORE[user_id_key] = str(mapped_id)
+                    keys = [user_id_key, resolve_user_phone(), "anonymous"]
+                    _set_active_listing_for_keys(str(mapped_id), [k for k in keys if k])
                     if isinstance(ctx.conversation_state, dict):
                         ctx.conversation_state["active_listing_id"] = str(mapped_id)
                     conversation_history.append(cast(TResponseInputItem, {
@@ -2631,7 +2658,7 @@ async def run_workflow(workflow_input: WorkflowInput):
         raw_user_text_l = raw_user_text_full.strip().lower()
         wants_detail = requested_num is not None and any(k in raw_user_text_l for k in ("göster", "goster", "detay"))
         if wants_detail:
-            last = USER_LAST_SEARCH_RESULTS_STORE.get(user_id_key) or []
+            last = _get_last_results_for_user(resolve_user_id(user_id_key), resolve_user_phone())
             idx = (requested_num or 1) - 1
             if 0 <= idx < len(last):
                 item = last[idx] or {}
