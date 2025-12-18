@@ -2238,6 +2238,11 @@ Delete user's listings.
 - No bullet lists, no long explanations.
 - At most ONE question.
 
+🚫 BULK DELETE POLICY:
+- Do NOT claim to delete multiple listings at once.
+- If user says "tüm ilanlarımı / hepsini / tüm iPhone 13'leri sil": explain only one-by-one delete is supported and ask which one (by number) to delete now.
+- Only proceed with a single listing id per confirmation.
+
 🔢 HOW TO HANDLE "X NOLU İLAN":
 - ALWAYS call list_user_listings_tool first (order=created_at.desc, same as search).
 - Map the user’s request number (1-based) to that list: #1 = first item, #2 = second, etc.
