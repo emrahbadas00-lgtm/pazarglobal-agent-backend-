@@ -228,6 +228,19 @@ async def search_listings(
             item["signed_images"] = signed_images
             item["first_image_signed_url"] = signed_images[0] if signed_images else None
 
+            # Debug photo availability per listing (helps explain why frontend sees no images)
+            try:
+                print(
+                    "🛰️ DEBUG signed images",
+                    {
+                        "id": item.get("id"),
+                        "images_count": len(imgs),
+                        "signed_images_count": len(signed_images),
+                    },
+                )
+            except Exception:
+                pass
+
         # Get total count from Content-Range header if available
         total_count = len(data)
         content_range = resp.headers.get("content-range")
@@ -246,6 +259,9 @@ async def search_listings(
         print(f"📊 Returning: count={len(data)}, total={total_count}")
         
         return {
+                # Explicitly log Supabase request params to diagnose mismatches (web vs WhatsApp)
+                print("🛰️ DEBUG Supabase params:", params)
+
             "success": True,
             "count": len(data),  # Number of results returned in this response
             "total": total_count,  # Total number of matching listings (might be > count)
