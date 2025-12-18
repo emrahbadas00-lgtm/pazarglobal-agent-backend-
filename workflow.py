@@ -1148,7 +1148,7 @@ Respond with JSON only: {"intent": "create_listing"}
 - Separate list items with commas: "İlan ver, ürün ara, yardım al"
 - Keep sentences short (max 15 words) for better voice clarity
 """,
-    model="gpt-4o",
+    model="gpt-5-mini",
     output_type=RouterAgentIntentClassifierSchema,
     model_settings=ModelSettings(
         store=True
@@ -1497,6 +1497,7 @@ If user asks "işlemlerim", "harcamalarım", "geçmiş":
 
 searchagent = Agent(
     name="SearchAgent",
+    model="gpt-5-mini",
     instructions="""You are SearchAgent of PazarGlobal.
 
 ⚠️ CRITICAL: NEVER respond with JSON or structured data like {"intent":"search_product"}.
@@ -2093,7 +2094,7 @@ Tools available:
 - get_wallet_balance_tool
 
 NEVER use insert_listing_tool!""",
-    model="gpt-4o",
+    model="gpt-5-mini",
     tools=[update_listing_tool, list_user_listings_tool, clean_price_tool, add_premium_badge_tool, renew_listing_tool, get_wallet_balance_tool],
     model_settings=ModelSettings(
         store=True
@@ -2230,7 +2231,7 @@ Yeni bir işlem için:
 - Keep tone friendly and clear
 
 🚫 No tools needed.""",
-    model="gpt-4.1-mini",
+    model="gpt-5-nano",
     model_settings=ModelSettings(
         store=True
     )
@@ -2350,7 +2351,7 @@ ALWAYS ask confirmation before deleting!
 Tools:
 - list_user_listings_tool
 - delete_listing_tool""",
-    model="gpt-4o-mini",
+    model="gpt-5-mini",
     tools=[delete_listing_tool, list_user_listings_tool],
     model_settings=ModelSettings(
         store=True
