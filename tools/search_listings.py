@@ -27,9 +27,21 @@ async def generate_signed_urls(paths: List[str], expires_in: int = 3600) -> Dict
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return {}
 
+    # Filter out paths that are already full URLs (legacy data issue)
+    actual_paths = []
+    already_urls = {}
+    for p in paths:
+        if p.startswith("http://") or p.startswith("https://"):
+            # Already a full URL - return as-is
+            already_urls[p] = p
+        else:
+            actual_paths.append(p)
+
     # If bucket is public, prefer simple public URLs to avoid long signed tokens
     if SUPABASE_STORAGE_PUBLIC:
-        return {p: f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}/{quote(p)}" for p in paths}
+        result = {p: f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}/{quote(p)}" for p in actual_paths}
+        result.update(already_urls)  # Add pre-existing URLs
+        return result
 
     sign_url = f"{SUPABASE_URL}/storage/v1/object/sign/{SUPABASE_STORAGE_BUCKET}"
     headers = {
@@ -37,13 +49,13 @@ async def generate_signed_urls(paths: List[str], expires_in: int = 3600) -> Dict
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
         "Content-Type": "application/json",
     }
-    payload = {"paths": paths, "expiresIn": expires_in}
+    payload = {"paths": actual_paths, "expiresIn": expires_in}
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(sign_url, json=payload, headers=headers)
         if not resp.is_success:
-            return {}
+            return already_urls  # Return at least the pre-existing URLs
         data = resp.json() or []
         # Supabase returns list of objects with {signedURL, path}
         signed_map: Dict[str, str] = {}
@@ -54,9 +66,11 @@ async def generate_signed_urls(paths: List[str], expires_in: int = 3600) -> Dict
                 continue
             # Use as returned (already URL-safe); prepend base
             signed_map[path] = f"{SUPABASE_URL}{signed_url}"
+        # Merge with already_urls
+        signed_map.update(already_urls)
         return signed_map
     except Exception:
-        return {}
+        return already_urls
 
 
 async def search_listings(

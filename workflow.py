@@ -1666,13 +1666,16 @@ Detection keywords for SHOW MORE MODE:
 
 ⚠️ CRITICAL: PREFER SIMPLE SEARCHES + SMALL LIMITS FOR SPEED!
 
-**Strategy 1: Category-only (for very generic requests)**
-- User: "ev varmı" → category="Emlak", query=None, limit=5 (show first 5 Emlak listings)
-- User: "araba var mı" → category="Otomotiv", query=None, limit=5 (show first 5 cars)
-- WHY: Shows sample listings quickly, user can browse or refine search
-- ALWAYS use limit=5 for category-only to avoid timeout!
+**Strategy 1: Query + Category (ALWAYS USE BOTH!)**
+- User: "ev varmı" → query="ev", category="Emlak", limit=5
+- User: "araba var mı" → query="araba", category="Otomotiv", limit=5
+- User: "daire varmı" → query="daire", category="Emlak", limit=5
+- User: "telefon var mı" → query="telefon", category="Elektronik", limit=5
+- WHY: Query filter is REQUIRED for accurate results! Never search with only category.
+- ALWAYS extract main search keyword from user message as query parameter!
+- EXCEPTION: Only use query=None if user says "tüm [category] ilanları" or "hepsini göster"
 
-**Strategy 2: Query + Category (BEST for specific features)**
+**Strategy 2: Query + Category + Filters (for specific features)**
 - User: "kiralık daire varmı" → query="kiralık", category="Emlak"
 - User: "satılık ev" → query="satılık", category="Emlak"
 - User: "bahçe kat" → query="bahçe kat", category="Emlak"
