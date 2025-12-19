@@ -3168,22 +3168,29 @@ async def run_workflow(workflow_input: WorkflowInput):
         if force_wallet_intent:
             intent = "wallet_query"
         else:
-            # HIZLI INTENT DETECTION (Regex-based, ~0ms)
+            # HIZLI INTENT DETECTION (Regex-based, ~0ms) - ÖNCELİK SIRASI ÖNEMLİ!
             user_text_lower = raw_user_text_full.lower().strip()
             quick_intent = None
             
-            # Selamlama kalıpları
-            if any(word in user_text_lower for word in ["selam", "merhaba", "günaydın", "iyi günler", "hello", "hi", "hey"]) and len(user_text_lower.split()) <= 3:
-                quick_intent = "small_talk"
-            # İlan verme kalıpları
-            elif any(phrase in user_text_lower for phrase in ["ilan ver", "satmak istiyorum", "sat", "ürün satmak", "ilan oluştur"]):
+            # 1. ÖNCE SPESIFIK INTENT'LERI KONTROL ET (yüksek öncelik)
+            
+            # İlan verme kalıpları (en yüksek öncelik)
+            if any(phrase in user_text_lower for phrase in ["ilan ver", "satmak istiyorum", "ürün sat", "ilan oluştur", "yayınla"]):
                 quick_intent = "create_listing"
-            # Arama kalıpları
-            elif any(phrase in user_text_lower for phrase in ["ara", "bul", "arıyorum", "satılık", "ikinci el"]) and "ilan" not in user_text_lower:
+            
+            # Arama kalıpları (soru kalıpları dahil: "var mı", "satılık", "arıyorum")
+            elif any(phrase in user_text_lower for phrase in ["var mı", "varmı", "satılık", "arıyorum", "araba", "telefon", "bilgisayar", "ev", "daire", "ikinci el", "sıfır"]):
                 quick_intent = "search_listings"
+            
             # Cüzdan kalıpları
-            elif any(phrase in user_text_lower for phrase in ["bakiye", "kredi", "cüzdan", "wallet", "balance"]):
+            elif any(phrase in user_text_lower for phrase in ["bakiye", "kredi", "cüzdan", "wallet", "balance", "param"]):
                 quick_intent = "wallet_query"
+            
+            # 2. EN SONDA SELAMLAMA (sadece pure greeting ise)
+            # "selam" tek başınaysa veya "selam nasılsın" gibiyse → small_talk
+            # Ama "selam araba var mı" → search olmalı (yukarıda yakalandı)
+            elif any(word in user_text_lower for word in ["selam", "merhaba", "günaydın", "iyi günler", "hello", "hi", "hey"]) and len(user_text_lower.split()) <= 3:
+                quick_intent = "small_talk"
             
             # Hızlı intent bulunduysa LLM'e gitme
             if quick_intent:
