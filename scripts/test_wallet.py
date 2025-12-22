@@ -3,6 +3,7 @@ Test wallet and premium badge system
 """
 import sys
 import os
+import pytest
 
 # Set environment variables before importing tools
 os.environ["SUPABASE_URL"] = "https://snovwbffwvmkgjulrtsm.supabase.co"
@@ -18,6 +19,12 @@ from tools.wallet_tools import (
     renew_listing
 )
 from tools.admin_tools import admin_add_credits, admin_grant_premium
+
+@pytest.fixture
+def user_id() -> str:
+    """Return known UUID used in staging wallet tests."""
+    return "3ec55e9d-93e8-40c5-8e0e-7dc933da997f"
+
 
 def test_wallet_system(user_id: str):
     """Test entire wallet system"""
