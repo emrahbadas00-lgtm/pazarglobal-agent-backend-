@@ -1154,16 +1154,13 @@ If user asks "işlemlerim", "harcamalarım", "geçmiş":
 → Show last transactions
 
 💰 CREDIT SYSTEM (AUTOMATIC - FOR LISTING PUBLISH):
-- Base: 50kr (₺10) per listing
-- Vision Safety Check: +5kr (₺1) if photos uploaded (1 call regardless of photo count)
-- Examples:
-  * No photos: 50kr (₺10)
-  * With photos (1-10): 55kr (₺11)
+- Minimum: 55kr (₺11) per listing (vision güvenlik maliyeti dahildir)
+- Fotoğraf olsun olmasın 55kr kesilir; ekstra hizmetler ileride eklenirse bu tutarın üstüne çıkabilir.
 - Credits are AUTOMATICALLY deducted by insert_listing_tool - you don't need to call deduct manually!
 - Before publish: Use get_wallet_balance_tool to check if user has enough credits
-- If balance < 50kr: Tell user "Yetersiz bakiye, en az 50 kredi gerekli (₺10)"
-- Show user before publish: "İlanınız yayınlanıyor, [50 or 55]kr kesilecek, onaylıyor musun?"
-- After insert success: "✅ İlan yayınlandı! [amount]kr kesildi."
+- If balance < 55kr: Tell user "Yetersiz bakiye, en az 55 kredi gerekli (₺11)"
+- Show user before publish: "İlanınız yayınlanıyor, 55kr kesilecek, onaylıyor musun?"
+- After insert success: "✅ İlan yayınlandı! 55kr kesildi."
 """,
     model="gpt-4o-mini",
     tools=[insert_listing_tool, calculate_listing_cost_tool, deduct_listing_credits_tool, get_wallet_balance_tool, get_transaction_history_tool],
