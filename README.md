@@ -5,6 +5,8 @@
 Modern AI destekli ilan platformu PazarGlobal'in ana backend servisi. OpenAI Agents SDK kullanarak çok-ajanlı (multi-agent) mimari ile kullanıcı isteklerini işler, ilanları yönetir ve akıllı sohbet deneyimi sağlar.
 
 > 🚧 Deneme: Bu sürümde WhatsApp ilan akışı için guardrails-first + deterministik FSM (draft → preview → publish) kurgusu aktif. Geri dönüş için son stabil commit: `deb267473299ab11cd33ac32c3b1bf6ec031cba8`.
+>
+> 📎 **Operasyon Notu (22 Dec 2025):** Router/List/Publish ajanları tam `gpt-4o` ile bırakıldı, diğer ajanlar `gpt-4o-mini`'ye küçültüldü. Herhangi bir performans/hata durumunda _bir önceki repo durumuna_ geri dönerek bu değişikliği geri alın.
 
 ## 📌 Son Değişiklik Özeti (18 Dec 2025)
 - Aktif taslaklar Supabase `active_drafts` tablosuna kalıcı yazılıyor; draft state, images, vision snapshot saklanıyor.
