@@ -1748,7 +1748,7 @@ Tools available:
 - get_wallet_balance_tool
 
 NEVER use insert_listing_tool!""",
-    model="gpt-4o-mini",
+    model="gpt-4o",
     tools=[update_listing_tool, list_user_listings_tool, clean_price_tool, add_premium_badge_tool, renew_listing_tool, get_wallet_balance_tool],
     model_settings=ModelSettings(
         store=True
@@ -1861,7 +1861,7 @@ Yeni bir işlem için:
 - Keep tone friendly and clear
 
 🚫 No tools needed.""",
-    model="gpt-4o-mini",
+    model="gpt-4.1-mini",
     model_settings=ModelSettings(
         store=True
     )
