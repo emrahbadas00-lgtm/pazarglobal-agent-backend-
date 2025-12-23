@@ -1689,13 +1689,9 @@ Show compact summary WITHOUT images or long URLs:
 
 "🔍 [category name if used] kategorisinde toplam [USE 'total' FIELD FROM TOOL RESPONSE] ilan bulundu.
 
-İsterseniz size [min(total, 5)] ilan göstereyim, ya da spesifik arama yapabilirsiniz.
-→ '[min(total, 5)] ilan göster' yazın
+İsterseniz size 5 ilan göstereyim, ya da spesifik arama yapabilirsiniz.
+→ '5 ilan göster' yazın
 → Spesifik arama: Örn: 'BMW', 'kiralık daire', 'iPhone 14'"
-
-⚠️ IMPORTANT: Use actual number from 'total' field (max 5):
-- If total=2: "2 ilan göstereyim" and "2 ilan göster"
-- If total=5+: "5 ilan göstereyim" and "5 ilan göster"
 
 ⚠️ CRITICAL EXAMPLE:
 Tool response: {"success": true, "total": 6, "count": 5, "results": [...]}
