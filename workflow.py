@@ -1,5 +1,4 @@
 import os
-import asyncio
 import re
 import uuid
 import json
@@ -49,7 +48,6 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_PUBLIC_BUCKET = os.getenv("SUPABASE_PUBLIC_BUCKET", "product-images").strip("/")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 HYBRID_FLOW_ENABLED = os.getenv("HYBRID_FLOW_ENABLED", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
-VISION_MAX_CONCURRENCY = max(1, int(os.getenv("VISION_MAX_CONCURRENCY", "3") or "3"))
 
 
 def _hybrid_form_first_prompt(
@@ -116,29 +114,6 @@ def _hybrid_photo_only_prompt(*, last_intent: Optional[str], vision_product: Opt
         "- Ürün aramak için: Ne aradığınızı yazın (örn: 'koltuk takımı')\n"
         "- İlan oluşturmak için: Yukarıdaki formu doldurun"
     )
-
-
-def _is_affirmative(text: str) -> bool:
-    t = (text or "").strip().lower()
-    if not t:
-        return False
-    return t in {"evet", "e", "onayla", "onay", "tamam", "olur", "sil", "sildir", "yes", "ok"}
-
-
-def _is_negative(text: str) -> bool:
-    t = (text or "").strip().lower()
-    if not t:
-        return False
-    return t in {"hayır", "hayir", "h", "iptal", "vazgeç", "vazgec", "yok", "no"}
-
-
-def _title_from_last_results(user_key: str, listing_id: str) -> Optional[str]:
-    last = USER_LAST_SEARCH_RESULTS_STORE.get(user_key) or []
-    for item in last:
-        if str(item.get("id") or "") == str(listing_id):
-            title = (item.get("title") or "").strip()
-            return title or None
-    return None
 
 
 def _resolve_public_image_url(path: str) -> str:
@@ -2918,44 +2893,6 @@ async def run_workflow(workflow_input: WorkflowInput):
 
         # If user references "X nolu ilan", resolve it against last search results and persist active listing
         raw_user_text_full = (workflow.get("input_as_text") or "")
-
-        # Deterministic delete confirmation handling (prevents "evet" being misrouted)
-        if isinstance(ctx.conversation_state, dict) and ctx.conversation_state.get("mode") == "delete_confirm":
-            pending_id = ctx.conversation_state.get("pending_delete_listing_id") or ctx.conversation_state.get("active_listing_id")
-            if pending_id and _is_uuid(str(pending_id)):
-                if _is_affirmative(raw_user_text_full):
-                    del_result = await delete_listing_tool(str(pending_id))
-                    # Clear pending state regardless of outcome to avoid looping
-                    ctx.conversation_state.pop("pending_delete_listing_id", None)
-                    ctx.conversation_state["mode"] = ""
-                    if del_result.get("success"):
-                        return {
-                            "response": "✅ İlan silindi.",
-                            "intent": "delete_listing",
-                            "success": True,
-                        }
-                    err = del_result.get("message") or del_result.get("error") or "Silme işlemi başarısız."
-                    return {
-                        "response": f"❌ İlan silinemedi: {err}",
-                        "intent": "delete_listing",
-                        "success": False,
-                    }
-                if _is_negative(raw_user_text_full):
-                    ctx.conversation_state.pop("pending_delete_listing_id", None)
-                    ctx.conversation_state["mode"] = ""
-                    return {
-                        "response": "Tamam, silme işlemi iptal edildi.",
-                        "intent": "delete_listing",
-                        "success": True,
-                    }
-                title = _title_from_last_results(user_id_key, str(pending_id))
-                title_part = f"'{title}' " if title else ""
-                return {
-                    "response": f"{title_part}ilanını silmek istiyor musun? (evet/hayır)",
-                    "intent": "delete_listing",
-                    "success": True,
-                }
-
         requested_num = _extract_listing_number(raw_user_text_full)
         if requested_num is not None:
             last = _get_last_results_for_user(resolve_user_id(user_id_key), resolve_user_phone())
@@ -3167,55 +3104,35 @@ async def run_workflow(workflow_input: WorkflowInput):
 
         # VisionSafetyProductAgent only runs when explicit media is present
         if media_paths:
-            sem = asyncio.Semaphore(VISION_MAX_CONCURRENCY)
+            for media_path in media_paths:
+                image_url = _resolve_public_image_url(str(media_path))
+                vision_input: List[TResponseInputItem] = cast(List[TResponseInputItem], [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Analyze the attached image for safety and product. Return JSON only."},
+                            {"type": "input_image", "image_url": image_url}
+                        ]
+                    }
+                ])
 
-            async def _analyze_one(media_path: str) -> Dict[str, Any]:
-                async with sem:
-                    image_url = _resolve_public_image_url(str(media_path))
-                    vision_input: List[TResponseInputItem] = cast(List[TResponseInputItem], [
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "input_text", "text": "Analyze the attached image for safety and product. Return JSON only."},
-                                {"type": "input_image", "image_url": image_url}
-                            ]
-                        }
-                    ])
-                    try:
-                        vision_result_temp = await Runner.run(
-                            vision_safety_product_agent,
-                            input=vision_input,  # type: ignore[arg-type]
-                            run_config=RunConfig(trace_metadata={
-                                "__trace_source__": "agent-builder",
-                                "workflow_id": "vision_safety_product"
-                            })
-                        )
-                        return {
-                            "path": str(media_path),
-                            "success": True,
-                            "vision": vision_result_temp.final_output.model_dump(),
-                        }
-                    except Exception as exc:  # pragma: no cover
-                        return {
-                            "path": str(media_path),
-                            "success": False,
-                            "reason": f"vision_error: {exc}",
-                        }
-
-            # Parallelize per-image vision calls (major speedup for 2-10 photos)
-            vision_results = await asyncio.gather(*[_analyze_one(p) for p in media_paths])
-
-            # Process results in the original order for deterministic "first_safe_vision"
-            for item in vision_results:
-                media_path = str(item.get("path") or "")
-                if not item.get("success"):
+                try:
+                    vision_result_temp = await Runner.run(
+                        vision_safety_product_agent,
+                        input=vision_input,  # type: ignore[arg-type]
+                        run_config=RunConfig(trace_metadata={
+                            "__trace_source__": "agent-builder",
+                            "workflow_id": "vision_safety_product"
+                        })
+                    )
+                    vision_result = vision_result_temp.final_output.model_dump()
+                except Exception as exc:  # pragma: no cover
                     blocked_media_paths.append({
-                        "path": media_path,
-                        "reason": item.get("reason") or "vision_error",
+                        "path": str(media_path),
+                        "reason": f"vision_error: {exc}",
                     })
                     continue
 
-                vision_result = cast(Dict[str, Any], item.get("vision") or {})
                 safe_flag = bool(vision_result.get("safe"))
                 flag_type = (vision_result.get("flag_type") or "unknown")
                 allow_listing_flag = vision_result.get("allow_listing")
@@ -3449,33 +3366,6 @@ async def run_workflow(workflow_input: WorkflowInput):
             if active_draft and intent not in {"publish_listing", "cancel"}:
                 # Stay in deterministic draft loop for any non-publish, non-cancel intent
                 intent = "update_listing_draft"
-
-            # Deterministic delete confirmation kickoff (prevents routing issues on "evet")
-            if intent == "delete_listing":
-                resolved_uid = resolve_user_id()
-                if not resolved_uid:
-                    return {
-                        "response": "Bu işlem için giriş yapmanız gerekiyor.",
-                        "intent": "auth_required",
-                        "success": False,
-                    }
-                pending_id = None
-                if isinstance(state_for_update, dict):
-                    pending_id = state_for_update.get("active_listing_id")
-                if not pending_id or not _is_uuid(str(pending_id)):
-                    # Fallback: let the agent list user's listings and map by number
-                    pending_id = None
-                else:
-                    if isinstance(state_for_update, dict):
-                        state_for_update["mode"] = "delete_confirm"
-                        state_for_update["pending_delete_listing_id"] = str(pending_id)
-                    title = _title_from_last_results(user_id_key, str(pending_id))
-                    title_part = f"'{title}' " if title else ""
-                    return {
-                        "response": f"Merhaba {resolve_user_name() or ''}. {title_part}ilanını silinsin mi? (evet/hayır)",
-                        "intent": "delete_listing",
-                        "success": True,
-                    }
 
             # Deterministic state machine handles draft → preview → publish without tool-calling agents
             if intent in {"create_listing", "update_listing_draft", "publish_listing"}:
