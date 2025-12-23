@@ -2114,13 +2114,6 @@ Yeni bir işlem için:
 )
 
 
-async def _clear_active_draft_for_current_user():
-    """Helper to clear persisted draft for current user."""
-    resolved_user_id = resolve_user_id()
-    if resolved_user_id:
-        await db_clear_active_draft(resolved_user_id)
-
-
 # TEMPORARILY DISABLED - causing 500 errors with mcp_security connection
 # pinrequestagent = Agent(
 #     name="PINRequestAgent",
@@ -2998,16 +2991,6 @@ async def run_workflow(workflow_input: WorkflowInput):
         elif intent == "publish_listing":
             result = await Runner.run(
                 publishagent,
-                input=[*conversation_history],
-                run_config=RunConfig(trace_metadata={
-                    "__trace_source__": "agent-builder",
-                    "workflow_id": "wf_691884cc7e6081908974fe06852942af0249d08cf5054fdb"
-                })
-            )
-        elif intent == "cancel":
-            await _clear_active_draft_for_current_user()
-            result = await Runner.run(
-                cancelagent,
                 input=[*conversation_history],
                 run_config=RunConfig(trace_metadata={
                     "__trace_source__": "agent-builder",
