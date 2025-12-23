@@ -104,150 +104,6 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_PUBLIC_BUCKET = os.getenv("SUPABASE_PUBLIC_BUCKET", "product-images").strip("/")
 
 
-def _safe_int(value: Any) -> Optional[int]:
-    try:
-        if value is None:
-            return None
-        return int(value)
-    except Exception:
-        return None
-
-
-def _pick_owner_label(item: Dict[str, Any], fallback_phone: Optional[str]) -> str:
-    owner_name = (item.get("owner_name") or item.get("user_name") or "").strip() if isinstance(item.get("owner_name") or item.get("user_name"), str) else ""
-    owner_phone = (item.get("owner_phone") or item.get("user_phone") or "").strip() if isinstance(item.get("owner_phone") or item.get("user_phone"), str) else ""
-    if owner_name:
-        return owner_name
-    if owner_phone:
-        return owner_phone
-    if fallback_phone:
-        return fallback_phone
-    return "Telefon yok"
-
-
-def _pick_owner_phone(item: Dict[str, Any], fallback_phone: Optional[str]) -> str:
-    owner_phone = (item.get("owner_phone") or item.get("user_phone") or "").strip() if isinstance(item.get("owner_phone") or item.get("user_phone"), str) else ""
-    if owner_phone:
-        return owner_phone
-    if fallback_phone:
-        return fallback_phone
-    return "Telefon yok"
-
-
-def _extract_room_count(item: Dict[str, Any]) -> Optional[str]:
-    # Canonical location: listings.metadata.room_count
-    metadata = item.get("metadata")
-    if isinstance(metadata, dict):
-        rc = metadata.get("room_count") or metadata.get("rooms")
-        if isinstance(rc, str) and rc.strip():
-            return rc.strip()
-        if isinstance(rc, (int, float)):
-            return str(rc)
-
-    # Fallbacks if backend already denormalized some fields
-    for key in ("room_count", "rooms"):
-        v = item.get(key)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-        if isinstance(v, (int, float)):
-            return str(v)
-    return None
-
-
-def _format_compact_list(items: List[Dict[str, Any]], start_index: int, end_index: int, fallback_phone: Optional[str]) -> str:
-    # start_index/end_index are 1-based inclusive
-    shown = items[start_index - 1:end_index]
-    if not shown:
-        return "İlan bulunamadı."
-
-    header = "🔍 İlk {} ilan:".format(len(shown)) if start_index == 1 else f"🔍 {start_index}-{end_index} numaralı ilanlar:"
-    lines: List[str] = [header, ""]
-
-    for i, item in enumerate(shown, start=start_index):
-        title = (item.get("title") or "").strip() if isinstance(item.get("title"), str) else ""
-        price = _safe_int(item.get("price"))
-        location = (item.get("location") or "").strip() if isinstance(item.get("location"), str) else ""
-        owner = _pick_owner_label(item, fallback_phone)
-        owner_phone = _pick_owner_phone(item, fallback_phone)
-        room_count = _extract_room_count(item)
-        title = title or "Başlık yok"
-        price_text = f"{price:,}".replace(",", ".") + " TL" if price is not None else "Fiyat yok"
-        location_text = location or "Konum yok"
-
-        lines.append(f"{i}️⃣ {title}")
-        extra_bits: List[str] = []
-        if room_count:
-            extra_bits.append(f"🏠 {room_count}")
-        # Always show phone separately so users can contact.
-        extra_bits.append(f"📞 {owner_phone}")
-        extra = " | " + " | ".join(extra_bits) if extra_bits else ""
-        lines.append(f"   💰 {price_text} | 📍 {location_text} | 👤 {owner}{extra}")
-        lines.append("")
-
-    lines.append("💡 Detay: 'X nolu ilanı göster' yazın.")
-    lines.append("💡 Daha fazla: 'daha fazla göster' yazın.")
-    return "\n".join(lines).strip()
-
-
-def _format_detail(item: Dict[str, Any], number: int, fallback_phone: Optional[str]) -> str:
-    title = (item.get("title") or "").strip() if isinstance(item.get("title"), str) else ""
-    price = _safe_int(item.get("price"))
-    location = (item.get("location") or "").strip() if isinstance(item.get("location"), str) else ""
-    condition = (item.get("condition") or "").strip() if isinstance(item.get("condition"), str) else ""
-    category = (item.get("category") or "").strip() if isinstance(item.get("category"), str) else ""
-    listing_id = (item.get("id") or "").strip() if isinstance(item.get("id"), str) else ""
-
-    owner_name = (item.get("owner_name") or item.get("user_name") or "").strip() if isinstance(item.get("owner_name") or item.get("user_name"), str) else ""
-    owner_phone_raw = (item.get("owner_phone") or item.get("user_phone") or "").strip() if isinstance(item.get("owner_phone") or item.get("user_phone"), str) else ""
-    owner_phone = owner_phone_raw or (fallback_phone or "")
-    if not owner_phone:
-        owner_phone = "Telefon yok"
-
-    signed_images = item.get("signed_images")
-    image_urls: List[str] = []
-    if isinstance(signed_images, list):
-        for u in signed_images:
-            if isinstance(u, str) and u.strip():
-                image_urls.append(u.strip())
-    # Some tools store only first image as first_image_signed_url
-    if not image_urls:
-        first_signed = item.get("first_image_signed_url")
-        if isinstance(first_signed, str) and first_signed.strip():
-            image_urls = [first_signed.strip()]
-    image_urls = image_urls[:3]
-
-    lines: List[str] = []
-    lines.append(title or "Başlık yok")
-    lines.append("")
-    if price is not None:
-        lines.append(f"Fiyat: {str(price).strip()} TL")
-    else:
-        lines.append("Fiyat: Fiyat yok")
-    lines.append(f"Konum: {location or 'Konum yok'}")
-    lines.append(f"Durum: {condition or 'Belirtilmemiş'}")
-    lines.append(f"Kategori: {category or 'Belirtilmemiş'}")
-    if listing_id:
-        lines.append(f"İlan ID: {listing_id}")
-    if owner_name:
-        lines.append(f"İlan sahibi: {owner_name} | Telefon: {owner_phone}")
-    else:
-        lines.append(f"İlan sahibi: {owner_phone} | Telefon: {owner_phone}")
-
-    room_count = _extract_room_count(item)
-    if room_count:
-        lines.append(f"Oda: {room_count}")
-
-    lines.append("")
-    lines.append("Fotoğraflar:")
-    if image_urls:
-        lines.extend(image_urls)
-    else:
-        lines.append("Fotoğraf yok")
-    lines.append("")
-    lines.append(f"Detay için ilan #{number} not edin.")
-    return "\n".join(lines).strip()
-
-
 def _resolve_public_image_url(path: str) -> str:
     """Convert stored path to public URL for vision model access."""
     if not path:
@@ -611,44 +467,21 @@ async def search_listings_tool(
     try:
         user_key = resolve_user_id() or "anonymous"
         if isinstance(result, dict) and result.get("success") and isinstance(result.get("results"), list):
-            stored: List[Dict[str, Any]] = []
+            compact: List[Dict[str, Any]] = []
             for item in cast(List[Any], result.get("results") or []):
                 if not isinstance(item, dict):
                     continue
                 listing_id = item.get("id")
                 if not listing_id:
                     continue
-                # Keep only fields needed for list/detail rendering (avoid bloating memory)
-                stored.append({
+                compact.append({
                     "id": listing_id,
                     "title": item.get("title"),
                     "price": item.get("price"),
                     "category": item.get("category"),
                     "location": item.get("location"),
-                    "condition": item.get("condition"),
-                    "description": item.get("description"),
-                    "owner_name": item.get("owner_name") or item.get("user_name"),
-                    "owner_phone": item.get("owner_phone") or item.get("user_phone"),
-                    "user_name": item.get("user_name"),
-                    "user_phone": item.get("user_phone"),
-                    "signed_images": item.get("signed_images"),
-                    "first_image_signed_url": item.get("first_image_signed_url"),
-                    "metadata": item.get("metadata"),
                 })
-            USER_LAST_SEARCH_RESULTS_STORE[user_key] = stored[:25]
-
-            # Persist last search parameters for safe pagination ("daha fazla göster")
-            USER_LAST_SEARCH_META_STORE[user_key] = {
-                "query": query,
-                "category": category,
-                "condition": condition,
-                "location": location,
-                "min_price": min_price,
-                "max_price": max_price,
-                "metadata_type": metadata_type,
-                "limit": limit,
-                "total": result.get("total"),
-            }
+            USER_LAST_SEARCH_RESULTS_STORE[user_key] = compact[:25]
     except Exception:
         pass
 
@@ -2164,10 +1997,6 @@ USER_SAFE_MEDIA_STORE: Dict[str, List[str]] = {}
 # Format: {user_id: [{id,title,price,category,location}, ...]}
 USER_LAST_SEARCH_RESULTS_STORE: Dict[str, List[Dict[str, Any]]] = {}
 
-# Session store for last search parameters to support safe pagination without hallucination.
-# Format: {user_id: {query, category, ..., limit, total}}
-USER_LAST_SEARCH_META_STORE: Dict[str, Dict[str, Any]] = {}
-
 # Session store for currently active listing (selected listing for update flows)
 # Format: {user_id: listing_id}
 USER_ACTIVE_LISTING_STORE: Dict[str, str] = {}
@@ -2406,148 +2235,6 @@ async def run_workflow(workflow_input: WorkflowInput):
             "işlem geçmiş",
         )
         force_wallet_intent = any(k in raw_user_text for k in wallet_keywords)
-
-        # Fast-path: prevent hallucinated listings for follow-up commands.
-        # If user asks to show N listings, show more, or show listing detail, render strictly from stored tool results.
-        try:
-            user_key_for_search = user_id_key
-            last_items = USER_LAST_SEARCH_RESULTS_STORE.get(user_key_for_search) or []
-            last_meta = USER_LAST_SEARCH_META_STORE.get(user_key_for_search) or {}
-
-            raw_l = raw_user_text
-            requested_detail_num = _extract_listing_number(raw_user_text_full)
-
-            # "X ilan göster" pattern
-            m_show = re.search(r"\b(\d{1,2})\s*ilan\s*g[oö]ster\b", raw_l)
-            wants_show_more = any(k in raw_l for k in ("daha fazla", "diğer ilan", "devamını", "devamini"))
-
-            if requested_detail_num is not None and ("ilan" in raw_l or "detay" in raw_l):
-                if not last_items:
-                    return {
-                        "response": "Bunu bulamadım. Önce arama yapalım (örn: 'araba var mı' ya da 'BMW').",
-                        "intent": "search_product",
-                        "success": True,
-                        "safe_media_paths": [],
-                        "blocked_media_paths": [],
-                    }
-                idx = requested_detail_num - 1
-                if idx < 0 or idx >= len(last_items):
-                    return {
-                        "response": f"Bunu bulamadım. Bu aramada sadece {len(last_items)} ilan var, 1-{len(last_items)} arası seçebilirsiniz.",
-                        "intent": "search_product",
-                        "success": True,
-                        "safe_media_paths": [],
-                        "blocked_media_paths": [],
-                    }
-                item = last_items[idx]
-                return {
-                    "response": _format_detail(item, requested_detail_num, resolve_user_phone()),
-                    "intent": "search_product",
-                    "success": True,
-                    "safe_media_paths": [],
-                    "blocked_media_paths": [],
-                }
-
-            if m_show and last_items:
-                n = int(m_show.group(1))
-                n = max(1, min(n, 5))
-                end = min(n, len(last_items))
-                return {
-                    "response": _format_compact_list(last_items, 1, end, resolve_user_phone()),
-                    "intent": "search_product",
-                    "success": True,
-                    "safe_media_paths": [],
-                    "blocked_media_paths": [],
-                }
-
-            if wants_show_more and last_meta:
-                prev_limit = _safe_int(last_meta.get("limit")) or len(last_items) or 5
-                next_limit = prev_limit + 5
-                # Hard cap: don’t explode latency; WhatsApp messages also have length limits.
-                next_limit = min(next_limit, 15)
-                if next_limit <= prev_limit:
-                    return {
-                        "response": "Bunu bulamadım.",
-                        "intent": "search_product",
-                        "success": True,
-                        "safe_media_paths": [],
-                        "blocked_media_paths": [],
-                    }
-
-                # Re-query safely using stored params, then show only the next 5 items.
-                new_result = await search_listings(
-                    query=cast(Optional[str], last_meta.get("query")),
-                    category=cast(Optional[str], last_meta.get("category")),
-                    condition=cast(Optional[str], last_meta.get("condition")),
-                    location=cast(Optional[str], last_meta.get("location")),
-                    min_price=cast(Optional[int], last_meta.get("min_price")),
-                    max_price=cast(Optional[int], last_meta.get("max_price")),
-                    limit=next_limit,
-                    metadata_type=cast(Optional[str], last_meta.get("metadata_type")),
-                )
-                if not (isinstance(new_result, dict) and new_result.get("success") and isinstance(new_result.get("results"), list)):
-                    return {
-                        "response": "Hata oluştu.",
-                        "intent": "search_product",
-                        "success": True,
-                        "safe_media_paths": [],
-                        "blocked_media_paths": [],
-                    }
-
-                # Refresh stores (same shaping as in search_listings_tool)
-                refreshed: List[Dict[str, Any]] = []
-                for it in cast(List[Any], new_result.get("results") or []):
-                    if not isinstance(it, dict):
-                        continue
-                    listing_id = it.get("id")
-                    if not listing_id:
-                        continue
-                    refreshed.append({
-                        "id": listing_id,
-                        "title": it.get("title"),
-                        "price": it.get("price"),
-                        "category": it.get("category"),
-                        "location": it.get("location"),
-                        "condition": it.get("condition"),
-                        "description": it.get("description"),
-                        "owner_name": it.get("owner_name") or it.get("user_name"),
-                        "owner_phone": it.get("owner_phone") or it.get("user_phone"),
-                        "user_name": it.get("user_name"),
-                        "user_phone": it.get("user_phone"),
-                        "signed_images": it.get("signed_images"),
-                        "first_image_signed_url": it.get("first_image_signed_url"),
-                        "metadata": it.get("metadata"),
-                    })
-                USER_LAST_SEARCH_RESULTS_STORE[user_key_for_search] = refreshed[:25]
-                USER_LAST_SEARCH_META_STORE[user_key_for_search] = {**last_meta, "limit": next_limit, "total": new_result.get("total")}
-
-                if len(refreshed) <= prev_limit:
-                    return {
-                        "response": "Bunu bulamadım.",
-                        "intent": "search_product",
-                        "success": True,
-                        "safe_media_paths": [],
-                        "blocked_media_paths": [],
-                    }
-
-                start = prev_limit + 1
-                end = min(prev_limit + 5, len(refreshed))
-                return {
-                    "response": _format_compact_list(refreshed, start, end, resolve_user_phone()),
-                    "intent": "search_product",
-                    "success": True,
-                    "safe_media_paths": [],
-                    "blocked_media_paths": [],
-                }
-        except Exception:
-            # Never hallucinate on follow-ups; if something unexpected happens, return a generic error.
-            return {
-                "response": "Hata oluştu.",
-                "intent": "search_product",
-                "success": True,
-                "safe_media_paths": [],
-                "blocked_media_paths": [],
-            }
 
         # Step 0: Vision safety + product extraction (if media provided)
         media_paths_raw = workflow.get("media_paths")
