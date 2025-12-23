@@ -779,20 +779,6 @@ async def search_listings_tool(
             if user_key != "anonymous" and "anonymous" in USER_LAST_SEARCH_RESULTS_STORE and not USER_LAST_SEARCH_RESULTS_STORE.get("anonymous"):
                 USER_LAST_SEARCH_RESULTS_STORE["anonymous"] = compact[:25]
 
-            # Add [SEARCH_CACHE] to result for frontend listing cards (trim to first 5 listings)
-            if compact and isinstance(result, dict):
-                import json
-                cache_listings = compact[:5]  # Max 5 for cache
-                # Trim description and signed_images
-                for listing in cache_listings:
-                    if listing.get("description") and len(listing["description"]) > 160:
-                        listing["description"] = listing["description"][:160] + "..."
-                    if listing.get("signed_images") and len(listing["signed_images"]) > 3:
-                        listing["signed_images"] = listing["signed_images"][:3]
-                
-                cache_json = json.dumps({"results": cache_listings}, ensure_ascii=False)
-                result["search_cache"] = f"[SEARCH_CACHE]{cache_json}"
-
             # To avoid photo links in list view, strip signed_images/images before returning to agent (detail uses cached copy).
             for item in cast(List[Any], result.get("results") or []):
                 if isinstance(item, dict):
@@ -1895,13 +1881,10 @@ Detay için ilan #[number] not edin."
 3. Show full detail with ALL signed_images URLs⚠️ CATEGORY MISMATCH DETECTION:
 
 **CACHE THE RESULTS FOR DETAIL REQUESTS:**
-- **CRITICAL:** When search_listings_tool returns a result with 'search_cache' field, you MUST append that exact string to the END of your message.
-- The 'search_cache' field contains: `[SEARCH_CACHE]{"results": [...]}`
-- Example: If tool returns {"success": true, "results": [...], "search_cache": "[SEARCH_CACHE]{...}"}, append the search_cache value to your final response.
-- Place this at the very end of your message (after all listings and hints).
-- Do NOT explain or modify this cache line - just append it verbatim.
-- This enables the frontend to render interactive listing cards.
-
+- After you show the compact list, append a single hidden line (do NOT explain it) in this exact format:
+    `[SEARCH_CACHE]{"results": [ {"id": "...", "title": "...", "price": 123, "location": "...", "condition": "...", "category": "...", "description": "...", "signed_images": ["url1", "url2"], "user_name": "...", "user_phone": "..." } ]}`
+- Keep at most the listings you just showed (max 5) and keep description short (<=160 chars). Trim signed_images to max 3 per listing.
+- Place this line at the very end of your message so it can be stripped before sending to the user.
 If you find listings but category doesn't match query intent:
 → Example: User searches "bisiklet" (expect: Spor) but found in "Otomotiv"
 → Show warning:
