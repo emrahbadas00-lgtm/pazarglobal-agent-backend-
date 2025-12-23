@@ -74,7 +74,7 @@ from typing import Optional, Dict, Any, List, Iterable, Callable, Awaitable, cas
 # Import tool implementations
 from tools.clean_price import clean_price
 from tools.insert_listing import insert_listing
-from tools.search_listings import search_listings
+from tools.search_listings import search_listings, get_listing_by_id
 from tools.update_listing import update_listing as _update_listing
 from tools.delete_listing import delete_listing as _delete_listing
 from tools.list_user_listings import list_user_listings as _list_user_listings
@@ -438,6 +438,8 @@ async def search_listings_tool(
     max_price: Optional[int] = None,
     limit: int = 10,
     metadata_type: Optional[str] = None,
+    room_count: Optional[str] = None,
+    property_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Supabase'den ilan arar.
@@ -460,7 +462,9 @@ async def search_listings_tool(
         min_price=min_price,
         max_price=max_price,
         limit=limit,
-        metadata_type=metadata_type
+        metadata_type=metadata_type,
+        room_count=room_count,
+        property_type=property_type,
     )
 
     # Persist last search results per user so follow-ups like "1 nolu ilan" stay deterministic
@@ -480,6 +484,10 @@ async def search_listings_tool(
                     "price": item.get("price"),
                     "category": item.get("category"),
                     "location": item.get("location"),
+                    "condition": item.get("condition"),
+                    "user_name": item.get("user_name") or item.get("owner_name"),
+                    "user_phone": item.get("user_phone") or item.get("owner_phone"),
+                    "signed_images": (item.get("signed_images") or [])[:3] if isinstance(item.get("signed_images"), list) else [],
                 })
             USER_LAST_SEARCH_RESULTS_STORE[user_key] = compact[:25]
     except Exception:
@@ -1177,6 +1185,15 @@ searchagent = Agent(
     name="SearchAgent",
     instructions="""You are SearchAgent of PazarGlobal.
 
+🚫 ABSOLUTE RULE: NEVER show a section called "metadata" or raw JSON.
+- You MAY show user-friendly fields that come FROM metadata (e.g., "Oda: 3+1", "Emlak tipi: Dubleks").
+- Do not print keys/JSON; always convert to normal labels.
+
+✅ REQUIRED FIELDS (when showing a listing detail):
+- title, price, location, condition, category
+- user_name and/or user_phone (if missing: say "Telefon yok")
+- images: show up to 3 URLs from `signed_images` (one per line). If empty: say "Fotoğraf yok".
+
 ⚠️ CRITICAL: NEVER respond with JSON or structured data like {"intent":"search_product"}.
 ALWAYS respond in natural Turkish language as a helpful assistant.
 
@@ -1435,7 +1452,7 @@ Your response: "Otomotiv kategorisinde toplam 6 ilan bulundu." ← Use 'total' (
 "🔍 İlk 5 ilan:
 
 1️⃣ [title]
-   💰 [price] TL | 📍 [location] | 👤 [user_name or user_phone]
+    💰 [price] TL | 📍 [location] | 📦 [condition] | 👤 [user_name or user_phone] | 📸 [N]
    
 2️⃣ [title]
    💰 [price] TL | 📍 [location] | 👤 [user_name or user_phone]
@@ -1451,7 +1468,7 @@ Your response: "Otomotiv kategorisinde toplam 6 ilan bulundu." ← Use 'total' (
 - **ALWAYS show owner**: 👤 [user_name or user_phone]
 - If user_name exists: 👤 [user_name]
 - If user_name missing: show owner_phone; if empty, fall back to USER_PHONE from context; if still empty say "Telefon yok"
-- Only show: number, title, price, location, **owner**
+- Also show: condition (if available) and photo count: 📸 [len(signed_images)]
 - Keep VERY short (total < 800 chars for 5 listings)
    💰 [price] TL | 📍 [location]
    
@@ -1522,6 +1539,10 @@ Phone rule: Use the exact phone provided in listing (owner_phone/user_phone). If
 Fotoğraflar:
 [EACH URL FROM signed_images ARRAY ON SEPARATE LINE - MAX 3 URLs]
 [IF signed_images IS EMPTY: Say 'Fotoğraf yok']
+
+⚠️ IMAGE SOURCE NOTE:
+- `signed_images` may be derived from either `images` array OR `image_url` fallback.
+- If you don't see any URLs, say "Fotoğraf yok" (do not invent).
 
 Detay için ilan #[number] not edin."
 
@@ -2024,6 +2045,37 @@ async def run_workflow(workflow_input: WorkflowInput):
         )
         WORKFLOW_CONTEXT.set(ctx)
         workflow = workflow_input.model_dump()
+
+        def _parse_last_search_results_from_history(raw_hist: Any) -> List[Dict[str, Any]]:
+            """Parse a compact [LAST_SEARCH_RESULTS] note from incoming history.
+
+            Expected format:
+              [LAST_SEARCH_RESULTS] #1 id=... title=... | #2 id=... title=...
+            """
+            out: List[Dict[str, Any]] = []
+            if not isinstance(raw_hist, list):
+                return out
+            # Scan from newest to oldest
+            for msg in reversed(raw_hist):
+                if not isinstance(msg, dict):
+                    continue
+                if msg.get("role") != "assistant":
+                    continue
+                text = msg.get("content")
+                if not isinstance(text, str):
+                    continue
+                if "[LAST_SEARCH_RESULTS]" not in text:
+                    continue
+                # Extract segments like #1 id=... title=...
+                segments = text.split("[LAST_SEARCH_RESULTS]", 1)[1]
+                for m in re.finditer(r"#\d+\s+id=([0-9a-fA-F-]{36})\s+title=([^|]+)", segments):
+                    lid = m.group(1).strip()
+                    title = m.group(2).strip()
+                    if lid:
+                        out.append({"id": lid, "title": title})
+                if out:
+                    return out
+            return out
         
         # DEBUG: Log media paths to diagnose webchat image upload issue
         if workflow.get("media_paths"):
@@ -2109,6 +2161,8 @@ async def run_workflow(workflow_input: WorkflowInput):
         requested_num = _extract_listing_number(raw_user_text_full)
         if requested_num is not None:
             last = USER_LAST_SEARCH_RESULTS_STORE.get(user_id_key) or []
+            if not last:
+                last = _parse_last_search_results_from_history(workflow.get("conversation_history"))
             idx = requested_num - 1
             if 0 <= idx < len(last):
                 mapped_id = last[idx].get("id")
@@ -2220,6 +2274,117 @@ async def run_workflow(workflow_input: WorkflowInput):
         
         if guardrails_hastripwire:
             return {"error": "Content blocked by guardrails"}
+
+        # Server-side deterministic detail view for "X nolu ilanı göster".
+        # This avoids LLM confusion and fixes WebChat/WhatsApp when history is pruned.
+        raw_user_text_detail = (workflow.get("input_as_text") or "")
+        raw_user_text_detail_l = raw_user_text_detail.strip().lower()
+        detail_num = _extract_listing_number(raw_user_text_detail)
+        wants_detail = (
+            detail_num is not None
+            and any(k in raw_user_text_detail_l for k in ("detay", "detaylı", "detayli", "göster", "goster", "foto", "fotoğraf", "fotograf"))
+            and "ilan" in raw_user_text_detail_l
+        )
+        is_update_like = any(k in raw_user_text_detail_l for k in ("güncelle", "guncelle", "düzenle", "duzenle", "değiş", "degis", "sil"))
+        if wants_detail and not is_update_like:
+            try:
+                last = USER_LAST_SEARCH_RESULTS_STORE.get(user_id_key) or []
+                if not last:
+                    last = _parse_last_search_results_from_history(workflow.get("conversation_history"))
+                idx = (detail_num or 0) - 1
+                if idx < 0 or idx >= len(last):
+                    return {
+                        "response": "Bunu bulamadım.",
+                        "intent": "search_product_detail",
+                        "success": False,
+                    }
+                listing_id = str(last[idx].get("id") or "").strip()
+                if not listing_id:
+                    return {
+                        "response": "Bunu bulamadım.",
+                        "intent": "search_product_detail",
+                        "success": False,
+                    }
+
+                detail_res = await get_listing_by_id(listing_id)
+                if not isinstance(detail_res, dict) or not detail_res.get("success"):
+                    # not_found should map to "Bunu bulamadım"; everything else "Hata oluştu"
+                    err = str(detail_res.get("error") if isinstance(detail_res, dict) else "")
+                    msg = "Bunu bulamadım." if err == "not_found" else "Hata oluştu."
+                    return {
+                        "response": msg,
+                        "intent": "search_product_detail",
+                        "success": False,
+                    }
+
+                item = detail_res.get("result")
+                if not isinstance(item, dict):
+                    return {
+                        "response": "Hata oluştu.",
+                        "intent": "search_product_detail",
+                        "success": False,
+                    }
+
+                title = str(item.get("title") or "").strip() or "İlan"
+                price = item.get("price")
+                price_text = f"{price} TL" if price is not None else "Belirtilmemiş"
+                location = str(item.get("location") or "").strip() or "Belirtilmemiş"
+                condition = str(item.get("condition") or "").strip() or "Belirtilmemiş"
+                category = str(item.get("category") or "").strip() or "Belirtilmemiş"
+
+                # Derived-from-metadata fields (never label as metadata)
+                room_count = str(item.get("room_count") or "").strip()
+                property_type = str(item.get("property_type") or "").strip()
+
+                user_name = str(item.get("user_name") or item.get("owner_name") or "").strip()
+                user_phone = str(item.get("user_phone") or item.get("owner_phone") or resolve_user_phone() or "").strip()
+                phone_line = f"İlan sahibi: {user_name} | Telefon: {user_phone}" if user_name and user_phone else (
+                    f"İlan sahibi: {user_name}" if user_name else (f"Telefon: {user_phone}" if user_phone else "Telefon yok")
+                )
+
+                desc = str(item.get("description") or "").strip()
+                if len(desc) > 220:
+                    desc = desc[:220].rstrip() + "…"
+
+                signed_images = item.get("signed_images")
+                photos: List[str] = []
+                if isinstance(signed_images, list):
+                    photos = [str(u).strip() for u in signed_images if isinstance(u, str) and u.strip()][:3]
+
+                lines: List[str] = [
+                    title,
+                    "",
+                    f"Fiyat: {price_text}",
+                    f"Konum: {location}",
+                    f"Durum: {condition}",
+                    f"Kategori: {category}",
+                ]
+                if room_count:
+                    lines.append(f"Oda: {room_count}")
+                if property_type:
+                    lines.append(f"Emlak tipi: {property_type}")
+                lines.append(phone_line)
+                if desc:
+                    lines.append("")
+                    lines.append(desc)
+                lines.append("")
+                lines.append("Fotoğraflar:")
+                if photos:
+                    lines.extend(photos)
+                else:
+                    lines.append("Fotoğraf yok")
+
+                return {
+                    "response": "\n".join(lines).strip(),
+                    "intent": "search_product_detail",
+                    "success": True,
+                }
+            except Exception:
+                return {
+                    "response": "Hata oluştu.",
+                    "intent": "search_product_detail",
+                    "success": False,
+                }
 
         # Fast-path routing for wallet queries (avoid misclassification to small_talk)
         raw_user_text = (workflow.get("input_as_text") or "").strip().lower()

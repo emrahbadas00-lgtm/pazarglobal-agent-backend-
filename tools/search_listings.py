@@ -1,7 +1,8 @@
 # tools/search_listings.py
 
 import os
-from typing import Any, Dict, Optional, List
+import json
+from typing import Any, Dict, Optional, List, Iterable, Tuple
 
 import httpx
 from urllib.parse import quote
@@ -9,7 +10,8 @@ from urllib.parse import quote
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "product-images")
+# Accept both env names used across the repo
+SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET") or os.getenv("SUPABASE_PUBLIC_BUCKET") or "product-images"
 SUPABASE_STORAGE_PUBLIC = os.getenv("SUPABASE_STORAGE_PUBLIC", "false").lower() in ("1", "true", "yes")
 
 
@@ -100,11 +102,38 @@ async def search_listings(
     url = f"{SUPABASE_URL}/rest/v1/listings"
     
     # Supabase query parametreleri
+    # NOTE: We intentionally avoid selecting `metadata` to prevent accidental leakage in agent outputs.
+    # Filters can still use metadata->>... even if metadata isn't selected.
+    select_fields = ",".join(
+        [
+            "id",
+            "user_id",
+            "title",
+            "description",
+            "category",
+            "price",
+            "stock",
+            "location",
+            "status",
+            "created_at",
+            "updated_at",
+            "condition",
+            "image_url",
+            "images",
+            "is_premium",
+            "user_name",
+            "user_phone",
+            "premium_until",
+            "premium_badge",
+            "expires_at",
+        ]
+    )
+
     params: Dict[str, str] = {
         "limit": str(limit),
         "order": "created_at.desc",
         "status": "eq.active",  # Default: Only show active listings
-        "select": "*",  # Get all listing fields
+        "select": select_fields,
     }
     
     # Filtreler - Supabase PostgREST syntax
@@ -187,14 +216,64 @@ async def search_listings(
 
         data = resp.json()
 
-        # Collect all image paths to sign in one request
+        def _normalize_image_entries(value: Any) -> List[str]:
+            """Return best-effort list of storage paths or URLs from a jsonb-like value."""
+            if value is None:
+                return []
+            if isinstance(value, list):
+                out: List[str] = []
+                for it in value:
+                    if isinstance(it, str):
+                        s = it.strip()
+                        if s:
+                            out.append(s)
+                    elif isinstance(it, dict):
+                        # tolerate formats like {"path": "..."} or {"url": "..."}
+                        for key in ("path", "object_path", "storage_path", "url"):
+                            v = it.get(key)
+                            if isinstance(v, str) and v.strip():
+                                out.append(v.strip())
+                                break
+                return out
+            if isinstance(value, dict):
+                # Occasionally stored as {paths:[...]} or similar
+                for key in ("paths", "images", "value"):
+                    inner = value.get(key)
+                    if inner is not None:
+                        return _normalize_image_entries(inner)
+                return []
+            if isinstance(value, str):
+                s = value.strip()
+                if not s:
+                    return []
+                # If it looks like a JSON array, parse it.
+                if (s.startswith("[") and s.endswith("]")) or (s.startswith("{") and s.endswith("}")):
+                    try:
+                        parsed = json.loads(s)
+                        return _normalize_image_entries(parsed)
+                    except Exception:
+                        # fall back to treating as single path
+                        return [s]
+                return [s]
+            return []
+
+        def _collect_listing_image_refs(item: Dict[str, Any]) -> List[str]:
+            refs: List[str] = []
+            refs.extend(_normalize_image_entries(item.get("images")))
+            img0 = item.get("image_url")
+            if isinstance(img0, str) and img0.strip():
+                refs.append(img0.strip())
+            # Deduplicate while preserving order
+            return list(dict.fromkeys(refs))
+
+        # Collect all storage paths to sign in one request (skip already-absolute URLs)
         all_paths: List[str] = []
         for item in data:
-            imgs = item.get("images") if isinstance(item, dict) else None
-            if isinstance(imgs, list):
-                for p in imgs:
-                    if isinstance(p, str):
-                        all_paths.append(p)
+            if not isinstance(item, dict):
+                continue
+            for ref in _collect_listing_image_refs(item):
+                if isinstance(ref, str) and ref and not ref.lower().startswith("http"):
+                    all_paths.append(ref)
 
         signed_map: Dict[str, str] = {}
         if all_paths:
@@ -218,8 +297,22 @@ async def search_listings(
             item["owner_name"] = owner_name
             item["owner_phone"] = owner_phone
 
-            imgs = item.get("images") if isinstance(item.get("images"), list) else []
-            signed_images = [signed_map[p] for p in imgs if isinstance(p, str) and p in signed_map]
+            refs = _collect_listing_image_refs(item)
+            signed_images: List[str] = []
+            for ref in refs:
+                if not isinstance(ref, str) or not ref:
+                    continue
+                if ref.lower().startswith("http"):
+                    signed_images.append(ref)
+                    continue
+                signed = signed_map.get(ref)
+                if signed:
+                    signed_images.append(signed)
+                elif SUPABASE_STORAGE_PUBLIC and SUPABASE_URL:
+                    # Best-effort fallback when signing fails but bucket is public
+                    signed_images.append(f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}/{quote(ref)}")
+            # Unique, preserve order
+            signed_images = list(dict.fromkeys(signed_images))
             item["signed_images"] = signed_images
             item["first_image_signed_url"] = signed_images[0] if signed_images else None
 
@@ -247,6 +340,206 @@ async def search_listings(
             "results": data,
         }
             
+    except httpx.TimeoutException:
+        return {
+            "success": False,
+            "error": "Request timeout - Supabase bağlantısı zaman aşımına uğradı",
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Beklenmeyen hata: {str(e)}",
+        }
+
+
+async def get_listing_by_id(listing_id: str) -> Dict[str, Any]:
+    """Fetch a single listing by UUID.
+
+    Important:
+    - Reads `metadata` to extract user-facing fields (e.g., room_count) but does NOT return raw `metadata`.
+    - Produces `signed_images` using `images` and `image_url` fallback.
+    """
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return {
+            "success": False,
+            "error": "SUPABASE_URL veya SUPABASE_SERVICE_KEY tanımlı değil",
+        }
+
+    listing_id_s = str(listing_id or "").strip()
+    if not listing_id_s:
+        return {
+            "success": False,
+            "error": "missing_listing_id",
+        }
+
+    url = f"{SUPABASE_URL}/rest/v1/listings"
+    select_fields = ",".join(
+        [
+            "id",
+            "user_id",
+            "title",
+            "description",
+            "category",
+            "price",
+            "stock",
+            "location",
+            "status",
+            "created_at",
+            "updated_at",
+            "condition",
+            "image_url",
+            "images",
+            "metadata",
+            "is_premium",
+            "user_name",
+            "user_phone",
+            "premium_until",
+            "premium_badge",
+            "expires_at",
+        ]
+    )
+
+    params: Dict[str, str] = {
+        "id": f"eq.{listing_id_s}",
+        "limit": "1",
+        "select": select_fields,
+    }
+
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    }
+
+    def _normalize_image_entries(value: Any) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            out: List[str] = []
+            for it in value:
+                if isinstance(it, str):
+                    s = it.strip()
+                    if s:
+                        out.append(s)
+                elif isinstance(it, dict):
+                    for key in ("path", "object_path", "storage_path", "url"):
+                        v = it.get(key)
+                        if isinstance(v, str) and v.strip():
+                            out.append(v.strip())
+                            break
+            return out
+        if isinstance(value, dict):
+            for key in ("paths", "images", "value"):
+                inner = value.get(key)
+                if inner is not None:
+                    return _normalize_image_entries(inner)
+            return []
+        if isinstance(value, str):
+            s = value.strip()
+            if not s:
+                return []
+            if (s.startswith("[") and s.endswith("]")) or (s.startswith("{") and s.endswith("}")):
+                try:
+                    parsed = json.loads(s)
+                    return _normalize_image_entries(parsed)
+                except Exception:
+                    return [s]
+            return [s]
+        return []
+
+    def _collect_listing_image_refs(item: Dict[str, Any]) -> List[str]:
+        refs: List[str] = []
+        refs.extend(_normalize_image_entries(item.get("images")))
+        img0 = item.get("image_url")
+        if isinstance(img0, str) and img0.strip():
+            refs.append(img0.strip())
+        return list(dict.fromkeys(refs))
+
+    def _extract_public_fields_from_metadata(meta: Any) -> Dict[str, Any]:
+        if not isinstance(meta, dict):
+            return {}
+        out: Dict[str, Any] = {}
+
+        # Real estate
+        if meta.get("room_count") is not None:
+            out["room_count"] = meta.get("room_count")
+        if meta.get("property_type") is not None:
+            out["property_type"] = meta.get("property_type")
+
+        # Common
+        if meta.get("type") is not None:
+            out["listing_type"] = meta.get("type")
+        for key in ("brand", "model", "year"):
+            if meta.get(key) is not None:
+                out[key] = meta.get(key)
+        return out
+
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            resp = await client.get(url, params=params, headers=headers)
+
+        if not resp.is_success:
+            return {
+                "success": False,
+                "status": resp.status_code,
+                "error": resp.text,
+            }
+
+        data = resp.json() or []
+        if not isinstance(data, list) or not data:
+            return {
+                "success": False,
+                "error": "not_found",
+            }
+
+        item = data[0] if isinstance(data[0], dict) else None
+        if not isinstance(item, dict):
+            return {
+                "success": False,
+                "error": "invalid_result",
+            }
+
+        # owner convenience fields
+        item["owner_name"] = item.get("user_name")
+        item["owner_phone"] = item.get("user_phone")
+
+        # Extract safe public fields from metadata and drop raw metadata
+        meta = item.get("metadata")
+        extracted = _extract_public_fields_from_metadata(meta)
+        if extracted:
+            item.update(extracted)
+        if "metadata" in item:
+            item.pop("metadata", None)
+
+        # Sign images
+        refs = _collect_listing_image_refs(item)
+        paths_to_sign = [r for r in refs if isinstance(r, str) and r and not r.lower().startswith("http")]
+        signed_map: Dict[str, str] = {}
+        if paths_to_sign:
+            signed_map = await generate_signed_urls(list(dict.fromkeys(paths_to_sign)))
+
+        signed_images: List[str] = []
+        for ref in refs:
+            if not isinstance(ref, str) or not ref:
+                continue
+            if ref.lower().startswith("http"):
+                signed_images.append(ref)
+                continue
+            signed = signed_map.get(ref)
+            if signed:
+                signed_images.append(signed)
+            elif SUPABASE_STORAGE_PUBLIC and SUPABASE_URL:
+                signed_images.append(f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}/{quote(ref)}")
+
+        signed_images = list(dict.fromkeys(signed_images))
+        item["signed_images"] = signed_images
+        item["first_image_signed_url"] = signed_images[0] if signed_images else None
+
+        return {
+            "success": True,
+            "result": item,
+        }
+
     except httpx.TimeoutException:
         return {
             "success": False,
