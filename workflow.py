@@ -2543,36 +2543,28 @@ async def generate_structured_draft_update(
     vision_product: Optional[Dict[str, Any]],
     existing_draft: Optional[DraftState]
 ) -> Dict[str, Any]:
-    """OPTIMIZED: Tek LLM çağrısında hem extraction hem enhancement yapıyoruz."""
+    """LLM is used ONLY for structured field extraction; output must be deterministic JSON."""
     vision_context = vision_product or {}
     draft_context = existing_draft.publish_payload() if existing_draft else {}
-    
-    # Görsel varsa detaylı açıklama, yoksa kısa tut
-    has_vision = bool(vision_context.get("product_name") or vision_context.get("detected_text"))
 
     system_prompt = (
-        "Sen PazarGlobal için profesyonel ilan oluşturan bir AI asistansın. "
-        "Kullanıcının mesajından ve görsel analizinden (varsa) ilan bilgilerini çıkar ve AYNI ANDA profesyonel hale getir.\n\n"
-        "KURALLAR:\n"
-        "1. Başlık: 40-80 karakter, önemli özellikler içermeli (marka, model, özellikler)\n"
-        "2. Açıklama: " + ("Detaylı ve ikna edici (emoji kullan, madde işaretli)" if has_vision else "Kısa ve öz (1-2 cümle)") + "\n"
-        "3. Category, condition, location çıkar (varsa)\n"
-        "4. Fiyat belirtilmişse çıkar\n"
-        "5. JSON formatında döndür\n\n"
-        "JSON format: {\"title\": \"...\", \"description\": \"...\", \"price\": null|number, \"category\": \"...\", \"condition\": \"new\"|\"used\", \"location\": \"...\"}"
+        "You are a deterministic field extractor for a marketplace draft. "
+        "Return ONLY JSON with keys: title, description, price, category, condition, location, metadata (object), images (array). "
+        "Extract BASIC info only (short title, category, price). Do NOT create long descriptions yet. "
+        "Never call tools. Keep it concise and do not include extra keys."
     )
 
     user_prompt = (
-        f"Kullanıcı mesajı: {user_text or 'Yok'}\n"
-        f"Mevcut taslak: {json.dumps(draft_context, ensure_ascii=False)}\n"
-        f"Görsel analizi: {json.dumps(vision_context, ensure_ascii=False) if has_vision else 'Yok'}\n\n"
-        "Profesyonel ilan bilgileri oluştur (JSON):"
+        "User message: " + (user_text or "") + "\n"
+        f"Current draft: {json.dumps(draft_context, ensure_ascii=False)}\n"
+        f"Vision product summary (optional): {json.dumps(vision_context, ensure_ascii=False)}\n"
+        "Return JSON only."
     )
 
     try:
         resp = await client.chat.completions.create(  # type: ignore[attr-defined]
             model="gpt-4o-mini",
-            temperature=0.1,  # 0.2'den 0.1'e düşürdük (daha hızlı)
+            temperature=0.2,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -2609,53 +2601,35 @@ async def handle_listing_fsm(
         state=ListingState.DRAFT,
         vision_product=vision_product or {},
     )
-    
-    # DÜZELTME: Görselleri merge et
-    if safe_media_paths:
-        draft.merge_images(safe_media_paths)
+    draft.merge_images(safe_media_paths)
 
     if intent in {"create_listing", "update_listing_draft"}:
-        # OPTIMIZED: Tek LLM çağrısında hem extraction hem enhancement
+        # 1. Extract ALL fields at once (batch extraction)
         update = await generate_structured_draft_update(user_text, vision_product, draft)
         if update.get("price") is not None:
             update["price"] = _normalize_price_value(update.get("price"))
         draft.apply_update(update)
 
+        # 2. LLM Enhancement: Süsle (if title/description too short)
+        needs_enhancement = (
+            (not draft.title or len(draft.title) < 20) or
+            (not draft.description or len(draft.description) < 50)
+        )
+        
+        if needs_enhancement:
+            enhanced = await enhance_draft_with_llm(draft, vision_product)
+            if enhanced.get("title"):
+                draft.title = enhanced["title"]
+            if enhanced.get("description"):
+                draft.description = enhanced["description"]
+
         # Optional: user explicitly asked for description improvement
         if _wants_description_suggestion(user_text):
             draft.description = _build_description_suggestion(draft)
 
-        # Ensure defaults for persisted draft
+        # 3. Ensure defaults for persisted draft
         draft.stock = draft.stock if draft.stock is not None else 1
         draft.metadata = _build_metadata(draft, vision_product)
-        
-        # DÜZELTME: Eksik zorunlu alanları kontrol et ve sor
-        missing_fields = []
-        if not draft.price or draft.price <= 0:
-            missing_fields.append("fiyat")
-        if not draft.location:
-            missing_fields.append("konum")
-        
-        # Eksik alan varsa sor
-        if missing_fields:
-            draft.state = ListingState.DRAFT
-            await db_upsert_active_draft(draft)
-            questions = []
-            if "fiyat" in missing_fields:
-                questions.append("💰 **Fiyat**: Ürününüzün satış fiyatı nedir? (örn: 5000 TL)")
-            if "konum" in missing_fields:
-                questions.append("📍 **Konum**: Ürününüz nerede? (örn: İstanbul, Ankara)")
-            
-            response = "İlanınızı tamamlamak için aşağıdaki bilgileri paylaşır mısınız?\n\n"
-            response += "\n".join(questions)
-            response += "\n\n💡 Bilgileri tek mesajda veya ayrı ayrı gönderebilirsiniz."
-            
-            return {
-                "response": response,
-                "intent": "create_listing",
-                "success": True,
-            }
-        
         draft.state = ListingState.PREVIEW if intent == "create_listing" else ListingState.EDIT
         await db_upsert_active_draft(draft)
         
