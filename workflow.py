@@ -1324,11 +1324,12 @@ Detection keywords for SHOW MORE MODE:
 
 6. **limit** → PAGINATION SYSTEM for better UX
    
-   **FIRST SEARCH (Initial request):**
-   - DEFAULT: Always use limit=5 (show first 5 listings)
-   - EVEN IF user says "tüm ilanları göster" → STILL use limit=5!
-   - WHY: Message length limit (1600 chars). More than 5 listings = message gets truncated!
-   - Generic or specific doesn't matter - ALWAYS start with 5
+    **FIRST SEARCH (Initial request):**
+    - DEFAULT: Always use limit=5 (show first 5 listings)
+    - If tool returns total ≤ 5: Show ALL results immediately in compact list without asking
+    - EVEN IF user says "tüm ilanları göster" → STILL use limit=5!
+    - WHY: Message length limit (1600 chars). More than 5 listings = message gets truncated!
+    - Generic or specific doesn't matter - ALWAYS start with 5
    
    **PAGINATION (User asks "daha fazla" or "hepsini göster"):**
    - Incremental approach: Add 5 more each time
@@ -1437,7 +1438,17 @@ If search returns 0 results:
 **FIRST SEARCH (Initial):**
 Show compact summary WITHOUT images or long URLs:
 
-"🔍 [category name if used] kategorisinde toplam [USE 'total' FIELD FROM TOOL RESPONSE] ilan bulundu.
+If total ≤ 5:
+"🔍 [category if used] kategorisinde toplam [total] ilan bulundu.
+
+Tüm sonuçlar:
+1️⃣ [title] — 💰 [price] TL | 📍 [location] | 👤 [owner]
+2️⃣ ... (up to total)
+
+Detay için: 'X nolu ilanı göster' yazın"
+
+If total > 5:
+"🔍 [category if used] kategorisinde toplam [total] ilan bulundu.
 
 İsterseniz size 5 ilan göstereyim, ya da spesifik arama yapabilirsiniz.
 → '5 ilan göster' yazın
@@ -1450,7 +1461,7 @@ Your response: "Otomotiv kategorisinde toplam 6 ilan bulundu." ← Use 'total' (
 ❌ WRONG: "5 adet ilan buldum" ← This uses 'count' field
 ✅ RIGHT: "toplam 6 ilan bulundu" ← This uses 'total' field
 
-**When user says "5 ilan göster" or confirms:**
+**When user says "5 ilan göster" or confirms (only applies when total > 5):**
 
 "🔍 İlk 5 ilan:
 
