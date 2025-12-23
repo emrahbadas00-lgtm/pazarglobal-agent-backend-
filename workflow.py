@@ -736,27 +736,6 @@ async def search_listings_tool(
         metadata_type: Metadata type filter
         exclude_user_id: Bu user_id'ye ait ilanları hariç tut (örn: "bana ait olmayan ilanlar")
     """
-    # Debug visibility for prod issues (Web vs WhatsApp result mismatch)
-    try:
-        print(
-            "🛰️ DEBUG search_listings_tool inputs:",
-            {
-                "query": query,
-                "category": category,
-                "condition": condition,
-                "location": location,
-                "min_price": min_price,
-                "max_price": max_price,
-                "limit": limit,
-                "metadata_type": metadata_type,
-                "exclude_user_id": exclude_user_id,
-                "resolved_user_id": resolve_user_id(),
-                "resolved_phone": resolve_user_phone(),
-            },
-        )
-    except Exception:
-        pass
-
     result = await search_listings(
         query=query,
         category=category,
@@ -813,21 +792,6 @@ async def search_listings_tool(
                 
                 cache_json = json.dumps({"results": cache_listings}, ensure_ascii=False)
                 result["search_cache"] = f"[SEARCH_CACHE]{cache_json}"
-
-                # Debug photo counts in cache to diagnose missing images on frontend
-                try:
-                    print(
-                        "🛰️ DEBUG search_cache photos",
-                        [
-                            {
-                                "id": l.get("id"),
-                                "signed_images_count": len(l.get("signed_images") or []),
-                            }
-                            for l in cache_listings
-                        ],
-                    )
-                except Exception:
-                    pass
 
             # To avoid photo links in list view, strip signed_images/images before returning to agent (detail uses cached copy).
             for item in cast(List[Any], result.get("results") or []):
