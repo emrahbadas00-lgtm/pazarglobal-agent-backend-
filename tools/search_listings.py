@@ -24,7 +24,7 @@ async def generate_signed_urls(paths: List[str], expires_in: int = 3600) -> Dict
     Returns:
         Mapping of path -> signed URL (missing or failed paths are skipped)
     """
-    if not SUPABASE_URL:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return {}
 
     # Filter out paths that are already full URLs (legacy data issue)
@@ -43,12 +43,6 @@ async def generate_signed_urls(paths: List[str], expires_in: int = 3600) -> Dict
         result.update(already_urls)  # Add pre-existing URLs
         return result
 
-    # If we don't have a service key, best-effort fallback to public URL build
-    if not SUPABASE_SERVICE_KEY:
-        fallback = {p: f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}/{quote(p)}" for p in actual_paths}
-        fallback.update(already_urls)
-        return fallback
-
     sign_url = f"{SUPABASE_URL}/storage/v1/object/sign/{SUPABASE_STORAGE_BUCKET}"
     headers = {
         "apikey": SUPABASE_SERVICE_KEY,
@@ -61,10 +55,7 @@ async def generate_signed_urls(paths: List[str], expires_in: int = 3600) -> Dict
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(sign_url, json=payload, headers=headers)
         if not resp.is_success:
-            # Fallback to public URL mapping so images still appear in dev
-            fallback = {p: f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}/{quote(p)}" for p in actual_paths}
-            fallback.update(already_urls)
-            return fallback
+            return already_urls  # Return at least the pre-existing URLs
         data = resp.json() or []
         # Supabase returns list of objects with {signedURL, path}
         signed_map: Dict[str, str] = {}
@@ -79,10 +70,7 @@ async def generate_signed_urls(paths: List[str], expires_in: int = 3600) -> Dict
         signed_map.update(already_urls)
         return signed_map
     except Exception:
-        # Network/other error → fallback to public URL mapping
-        fallback = {p: f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}/{quote(p)}" for p in actual_paths}
-        fallback.update(already_urls)
-        return fallback
+        return already_urls
 
 
 async def search_listings(
@@ -218,20 +206,21 @@ async def search_listings(
 
         data = resp.json()
 
-        # ⚡ PERFORMANCE with DETAIL READY PREVIEW: sign up to 3 images per listing (max ~15 URLs for 5 results)
-        preview_paths: List[str] = []
+        # ⚡ PERFORMANCE: Only generate signed URL for FIRST image (lazy load rest)
+        # Before: 10 listings x 3 photos = 30 signed URL requests (~20-30s)
+        # After: 10 listings x 1 photo = 10 signed URL requests (~5-7s)
+        first_image_paths: List[str] = []
         for item in data:
             imgs = item.get("images") if isinstance(item, dict) else None
             if isinstance(imgs, list) and len(imgs) > 0:
-                # Take up to 3 per listing for detail view readiness
-                for p in imgs[:3]:
-                    if isinstance(p, str):
-                        preview_paths.append(p)
+                first_img = imgs[0]
+                if isinstance(first_img, str):
+                    first_image_paths.append(first_img)
 
         signed_map: Dict[str, str] = {}
-        if preview_paths:
+        if first_image_paths:
             # Preserve order but remove duplicates
-            unique_paths = list(dict.fromkeys(preview_paths))
+            unique_paths = list(dict.fromkeys(first_image_paths))
             signed_map = await generate_signed_urls(unique_paths)
 
         # PERFORMANCE OPTIMIZATION: listings table already has user_name and user_phone (denormalized)
@@ -251,15 +240,10 @@ async def search_listings(
             item["owner_phone"] = owner_phone
 
             imgs = item.get("images") if isinstance(item.get("images"), list) else []
-            # Signed URLs for up to first 3 images
-            signed_urls: List[str] = []
-            for p in imgs[:3]:
-                if isinstance(p, str):
-                    url = signed_map.get(p)
-                    if url:
-                        signed_urls.append(url)
-            item["signed_images"] = signed_urls
-            item["first_image_signed_url"] = signed_urls[0] if signed_urls else None
+            # Only first image signed URL (rest lazy loaded)
+            first_image_signed = signed_map.get(imgs[0]) if imgs and imgs[0] in signed_map else None
+            item["signed_images"] = [first_image_signed] if first_image_signed else []
+            item["first_image_signed_url"] = first_image_signed
 
             # Debug photo availability per listing (helps explain why frontend sees no images)
             try:
@@ -268,7 +252,7 @@ async def search_listings(
                     {
                         "id": item.get("id"),
                         "images_count": len(imgs),
-                        "signed_images_count": len(item.get("signed_images", [])),
+                        "first_image_signed": bool(first_image_signed),
                     },
                 )
             except Exception:
