@@ -1,5 +1,6 @@
-""",
-    tools=[search_listings_tool, market_price_tool],
+"""
+Pazarglobal Agent Workflow
+Refactored to use native function tools instead of MCP
 
 FUTURE FEATURE - PREMIUM LISTING STRATEGY (Phase 3.5):
 ============================================================
@@ -54,8 +55,9 @@ IMPLEMENTATION PLAN:
 
 TODO: Implement after Phase 3 (Listing Management) is complete.
 ============================================================
-""",
-    tools=[search_listings_tool, market_price_tool],
+"""
+# pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownArgumentType=false, reportMissingParameterType=false, reportMissingTypeArgument=false
+import json
 import os
 import re
 import uuid
