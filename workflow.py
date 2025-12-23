@@ -47,55 +47,6 @@ list_user_listings: ListUserListingsFn = cast(ListUserListingsFn, _list_user_lis
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_PUBLIC_BUCKET = os.getenv("SUPABASE_PUBLIC_BUCKET", "product-images").strip("/")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
-HYBRID_FLOW_ENABLED = os.getenv("HYBRID_FLOW_ENABLED", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def _hybrid_form_first_prompt(
-    *,
-    vision_product: Optional[Dict[str, Any]] = None,
-    has_photos: bool = False,
-) -> str:
-    title_hint = ""
-    if vision_product and isinstance(vision_product, dict):
-        vp_title = (vision_product.get("title") or "").strip()
-        vp_category = (vision_product.get("category") or "").strip()
-        if vp_title or vp_category:
-            title_hint = f"\n\nTespit: {vp_title or 'Ürün'}" + (f" (kategori: {vp_category})" if vp_category else "")
-
-    intro = "Fotoğrafları aldım. " if has_photos else ""
-    return (
-        f"{intro}İlanınızı hızlıca oluşturalım. Lütfen TEK mesajda şu bilgileri yazın:\n\n"
-        "1) Ürün adı/başlık\n"
-        "2) Fiyat (TL)\n"
-        "3) Konum (il/ilçe)\n"
-        "4) Durum (sıfır / az kullanılmış / ikinci el)\n"
-        "5) Kısa açıklama\n\n"
-        "Örnek: 'iPhone 14 Pro Max 256GB, 45.000 TL, İstanbul Kadıköy, temiz, kutulu-faturalı'\n\n"
-        "Not: Fiyat ve konum zorunludur." + title_hint
-    )
-
-
-def _should_offer_form_first(user_text: str) -> bool:
-    t = (user_text or "").strip().lower()
-    if not t:
-        return True
-
-    # If user only triggered the flow ("ilan ver" etc.) without details, ask for one-shot form.
-    trigger_phrases = (
-        "ilan ver",
-        "ilan oluştur",
-        "ilan olustur",
-        "satmak istiyorum",
-        "ürün sat",
-        "urun sat",
-        "yayınla",
-        "yayinla",
-    )
-    if any(p in t for p in trigger_phrases) and len(t.split()) <= 5:
-        return True
-    if len(t) <= 18:
-        return True
-    return False
 
 
 def _resolve_public_image_url(path: str) -> str:
@@ -3212,18 +3163,9 @@ async def run_workflow(workflow_input: WorkflowInput):
                     }
                 ]
             }))
-
-            # IMPORTANT: propagate pending safe media into deterministic FSM inputs
-            # so drafts can reliably merge images even when photos and text are sent separately.
-            if not safe_media_paths:
-                safe_media_paths = [str(p).strip() for p in pending_safe_media if str(p).strip()]
         
         # Step 1: Classify intent (OPTIMIZED: Hızlı regex öncelikli, karmaşık durumlarda LLM)
-        if HYBRID_FLOW_ENABLED and safe_media_paths and not raw_user_text_full.strip() and not force_wallet_intent:
-            # Hybrid fast-path: photo-first message with no text → guide user with one-shot form
-            intent = "create_listing"
-            logger.info("⚡ Hybrid form-first (photo-only): intent=create_listing")
-        elif force_wallet_intent:
+        if force_wallet_intent:
             intent = "wallet_query"
         else:
             # HIZLI INTENT DETECTION (Regex-based, ~0ms) - ÖNCELİK SIRASI ÖNEMLİ!
@@ -3238,7 +3180,7 @@ async def run_workflow(workflow_input: WorkflowInput):
             
             # Arama kalıpları (soru kalıpları dahil: "var mı", "satılık", "arıyorum")
             elif any(phrase in user_text_lower for phrase in ["var mı", "varmı", "satılık", "arıyorum", "araba", "telefon", "bilgisayar", "ev", "daire", "ikinci el", "sıfır"]):
-                quick_intent = "search_product"
+                quick_intent = "search_listings"
             
             # Cüzdan kalıpları
             elif any(phrase in user_text_lower for phrase in ["bakiye", "kredi", "cüzdan", "wallet", "balance", "param"]):
@@ -3300,38 +3242,6 @@ async def run_workflow(workflow_input: WorkflowInput):
             # Deterministic FSM override: if active draft exists, keep user in draft loop unless explicitly publishing
             resolved_user_for_draft = resolve_user_id(user_id_key)
             active_draft = await db_get_active_draft(resolved_user_for_draft)
-
-            # HYBRID: Form-first kickoff for new listing (no active draft yet)
-            if HYBRID_FLOW_ENABLED and intent == "create_listing" and not active_draft:
-                if _should_offer_form_first(raw_user_text_full):
-                    resolved_uid = resolve_user_id()
-                    if not resolved_uid:
-                        return {
-                            "response": "Bu işlem için giriş yapmanız gerekiyor (aktif taslak yönetimi).",
-                            "intent": intent,
-                            "success": False,
-                            "safe_media_paths": safe_media_paths,
-                            "blocked_media_paths": blocked_media_paths,
-                        }
-                    draft = DraftState(
-                        id=str(uuid.uuid4()),
-                        user_id=resolved_uid,
-                        state=ListingState.DRAFT,
-                        vision_product=(first_safe_vision or {}).get("product") if first_safe_vision else {},
-                    )
-                    if safe_media_paths:
-                        draft.merge_images(safe_media_paths)
-                    await db_upsert_active_draft(draft)
-                    return {
-                        "response": _hybrid_form_first_prompt(
-                            vision_product=(first_safe_vision or {}).get("product") if first_safe_vision else None,
-                            has_photos=bool(safe_media_paths),
-                        ),
-                        "intent": "create_listing",
-                        "success": True,
-                        "safe_media_paths": safe_media_paths,
-                        "blocked_media_paths": blocked_media_paths,
-                    }
             if active_draft and intent not in {"publish_listing", "cancel"}:
                 # Stay in deterministic draft loop for any non-publish, non-cancel intent
                 intent = "update_listing_draft"
