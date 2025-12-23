@@ -219,19 +219,14 @@ async def search_listings(
         data = resp.json()
 
         # ⚡ PERFORMANCE with DETAIL READY PREVIEW: sign up to 3 images per listing (max ~15 URLs for 5 results)
-        # Some rows may store a single URL in image_url column instead of images[]
         preview_paths: List[str] = []
         for item in data:
             imgs = item.get("images") if isinstance(item, dict) else None
             if isinstance(imgs, list) and len(imgs) > 0:
                 # Take up to 3 per listing for detail view readiness
                 for p in imgs[:3]:
-                    if isinstance(p, str) and p.strip():
-                        preview_paths.append(p.strip())
-            else:
-                image_url = item.get("image_url") if isinstance(item, dict) else None
-                if isinstance(image_url, str) and image_url.strip():
-                    preview_paths.append(image_url.strip())
+                    if isinstance(p, str):
+                        preview_paths.append(p)
 
         signed_map: Dict[str, str] = {}
         if preview_paths:
@@ -256,22 +251,13 @@ async def search_listings(
             item["owner_phone"] = owner_phone
 
             imgs = item.get("images") if isinstance(item.get("images"), list) else []
-
-            # Signed URLs for up to first 3 images (fallback to image_url if images[] missing)
-            candidate_paths: List[str] = []
-            for p in imgs[:3]:
-                if isinstance(p, str) and p.strip():
-                    candidate_paths.append(p.strip())
-            if not candidate_paths:
-                image_url = item.get("image_url")
-                if isinstance(image_url, str) and image_url.strip():
-                    candidate_paths.append(image_url.strip())
-
+            # Signed URLs for up to first 3 images
             signed_urls: List[str] = []
-            for p in candidate_paths[:3]:
-                url = signed_map.get(p)
-                if url:
-                    signed_urls.append(url)
+            for p in imgs[:3]:
+                if isinstance(p, str):
+                    url = signed_map.get(p)
+                    if url:
+                        signed_urls.append(url)
             item["signed_images"] = signed_urls
             item["first_image_signed_url"] = signed_urls[0] if signed_urls else None
 
