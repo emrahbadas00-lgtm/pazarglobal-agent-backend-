@@ -57,14 +57,11 @@ TODO: Implement after Phase 3 (Listing Management) is complete.
 ============================================================
 """
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownArgumentType=false, reportMissingParameterType=false, reportMissingTypeArgument=false
-import json
 import os
 import re
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from enum import Enum
-import httpx
 from agents import Agent, AgentOutputSchema, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
 from agents.tool import function_tool
 from openai import AsyncOpenAI
@@ -105,7 +102,6 @@ list_user_listings: ListUserListingsFn = cast(ListUserListingsFn, _list_user_lis
 # Supabase public bucket info for constructing vision-safe URLs
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_PUBLIC_BUCKET = os.getenv("SUPABASE_PUBLIC_BUCKET", "product-images").strip("/")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 
 
 def _resolve_public_image_url(path: str) -> str:
@@ -214,188 +210,6 @@ def _extract_listing_number(text: str) -> Optional[int]:
         except Exception:
             continue
     return None
-
-
-class ListingState(str, Enum):
-    """Deterministic FSM states for listing lifecycle."""
-
-    IDLE = "IDLE"
-    DRAFT = "DRAFT"
-    PREVIEW = "PREVIEW"
-    EDIT = "EDIT"
-    PUBLISH = "PUBLISH"
-
-
-@dataclass
-class DraftState:
-    """Deterministic draft record kept in backend (LLM-free)."""
-
-    id: str
-    user_id: str
-    state: ListingState = ListingState.DRAFT
-    title: Optional[str] = None
-    description: Optional[str] = None
-    price: Optional[int] = None
-    category: Optional[str] = None
-    condition: Optional[str] = None
-    location: Optional[str] = None
-    stock: Optional[int] = 1
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    images: List[str] = field(default_factory=list)
-    vision_product: Dict[str, Any] = field(default_factory=dict)
-
-    def merge_images(self, new_images: Optional[List[str]]) -> None:
-        """Merge new safe images into draft without duplicates."""
-        if not new_images:
-            return
-        seen = set(self.images)
-        for img in new_images:
-            if img and img not in seen:
-                self.images.append(img)
-                seen.add(img)
-
-    def apply_update(self, update: Dict[str, Any]) -> None:
-        """Apply structured update from LLM extraction to the draft."""
-        if not isinstance(update, dict):
-            return
-        for key in ("title", "description", "category", "location"):
-            if update.get(key):
-                setattr(self, key, update.get(key))
-        normalized_condition = _normalize_condition_value(update.get("condition"))
-        if normalized_condition:
-            self.condition = normalized_condition
-        if update.get("stock") is not None:
-            try:
-                self.stock = int(update.get("stock"))
-            except Exception:
-                pass
-        if update.get("price") is not None:
-            try:
-                self.price = int(update.get("price"))
-            except Exception:
-                pass
-        if isinstance(update.get("metadata"), dict):
-            self.metadata.update(update.get("metadata") or {})
-        if update.get("images"):
-            self.merge_images([str(img) for img in update.get("images") if img])
-
-    def as_preview_text(self) -> str:
-        """Render a deterministic preview string for user confirmation."""
-        lines: List[str] = ["📝 İlan Taslağı (LLM-free FSM)"]
-        if self.title:
-            lines.append(f"Başlık: {self.title}")
-        if self.description:
-            lines.append(f"Açıklama: {self.description}")
-        if self.price is not None:
-            lines.append(f"Fiyat: {self.price} TL")
-        if self.category:
-            lines.append(f"Kategori: {self.category}")
-        if self.condition:
-            display_condition = _condition_display(self.condition) or self.condition
-            lines.append(f"Durum: {display_condition}")
-        location_display = self.location or "Türkiye"
-        lines.append(f"Lokasyon: {location_display}")
-        stock_display = self.stock if self.stock is not None else 1
-        lines.append(f"Stok: {stock_display}")
-        if self.metadata:
-            meta_pairs = [f"{k}: {v}" for k, v in self.metadata.items()]
-            lines.append("Özellikler: " + ", ".join(meta_pairs))
-        if self.images:
-            lines.append(f"Fotoğraf: {len(self.images)} adet eklendi")
-        lines.append("✅ Onayla / ✏️ Düzelt")
-        return "\n".join(lines)
-
-    def publish_payload(self) -> Dict[str, Any]:
-        """Payload for insert_listing_tool; keeps deterministic fields only."""
-        return {
-            "title": self.title or "Başlık bekleniyor",
-            "price": self.price,
-            "condition": self.condition,
-            "category": self.category,
-            "description": self.description,
-            "location": self.location,
-            "stock": self.stock,
-            "metadata": self.metadata or None,
-            "images": self.images or None,
-            "listing_id": self.id,
-        }
-
-
-def _normalize_price_value(value: Any) -> Optional[int]:
-    """Normalize free-form price to int using existing cleaner."""
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        try:
-            return int(value)
-        except Exception:
-            return None
-    if isinstance(value, str):
-        cleaned = clean_price(value or "")
-        if isinstance(cleaned, dict):
-            return cleaned.get("clean_price")
-    return None
-
-
-def _normalize_condition_value(value: Optional[str]) -> Optional[str]:
-    """Map free-form condition to canonical values accepted by DB."""
-    if not value:
-        return None
-    normalized = str(value).strip().lower()
-    synonyms = {
-        "yeni": "new",
-        "sıfır": "new",
-        "sifir": "new",
-        "brand new": "new",
-        "kullanılmış": "used",
-        "kullanilmis": "used",
-        "ikinci el": "used",
-        "second hand": "used",
-        "used": "used",
-        "new": "new",
-        "refurbished": "refurbished",
-        "yenilenmiş": "refurbished",
-        "yenilenmis": "refurbished",
-    }
-    if normalized in synonyms:
-        return synonyms[normalized]
-    # Default to used if condition text exists but is unrecognized
-    return "used"
-
-
-def _condition_display(value: Optional[str]) -> Optional[str]:
-    """User-facing label for canonical condition values."""
-    if not value:
-        return value
-    display_map = {
-        "new": "Yeni",
-        "used": "Kullanılmış",
-        "refurbished": "Yenilenmiş",
-    }
-    return display_map.get(value, value)
-
-
-def _build_metadata(draft: DraftState, vision_product: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Ensure metadata always has a minimal type and merge vision attributes."""
-    metadata: Dict[str, Any] = {}
-    if isinstance(draft.metadata, dict):
-        metadata.update(draft.metadata)
-
-    vision = vision_product or draft.vision_product or {}
-    if isinstance(vision, dict):
-        if isinstance(vision.get("attributes"), dict):
-            metadata.update({k: v for k, v in vision.get("attributes", {}).items() if v is not None})
-        for key in ("brand", "model", "color", "storage", "year", "type", "category"):
-            if key in vision and vision.get(key) is not None:
-                metadata.setdefault(key, vision.get(key))
-
-    if "type" not in metadata:
-        if isinstance(vision, dict) and vision.get("type"):
-            metadata["type"] = vision.get("type")
-        else:
-            metadata["type"] = "general"
-
-    return metadata
 
 # Native function tool definitions (plain Python async functions)
 @function_tool
@@ -948,12 +762,11 @@ router_agent_intent_classifier = Agent(
 You classify user messages into one of the following marketplace intents.
 Respond ONLY with valid JSON following the schema.
 
-## Valid Intents (deterministic FSM aware):
-- **"create_listing"** → user wants to start or continue a DRAFT (new listing flow)
-- **"update_listing_draft"** → user edits an UNPUBLISHED draft (preview/edit loop)
-- **"publish_listing"** → user CONFIRMS draft and wants to finalize
-- **"update_listing"** → user wants to CHANGE an EXISTING PUBLISHED listing (after "İlan yayınlandı" message)
+## Valid Intents:
+- **"create_listing"** → user wants to SELL an item OR editing a DRAFT listing (not yet published)
+- **"update_listing"** → user wants to CHANGE an EXISTING published listing (after "İlan yayınlandı" message)
 - **"delete_listing"** → user wants to DELETE/REMOVE existing listing
+- **"publish_listing"** → user CONFIRMS listing (wants to finalize and publish)
 - **"search_product"** → user wants to BUY or SEARCH
 - **"wallet_query"** → user asks about wallet balance/credits/transactions
 - **"small_talk"** → greetings, casual conversation
@@ -965,9 +778,9 @@ Respond ONLY with valid JSON following the schema.
 → User is in DRAFT/PREVIEW mode (listing not yet published)
 
 **In this context:**
-- "fiyat X olsun" → **update_listing_draft** (editing draft)
-- "başlık değiştir" → **update_listing_draft** (editing draft)  
-- "açıklama değiştir" → **update_listing_draft** (editing draft)
+- "fiyat X olsun" → **create_listing** (editing draft)
+- "başlık değiştir" → **create_listing** (editing draft)  
+- "açıklama değiştir" → **create_listing** (editing draft)
 - "onayla" / "yayınla" → **publish_listing** (finalize draft)
 - "iptal" → **cancel**
 
@@ -1947,24 +1760,7 @@ smalltalkagent = Agent(
     name="SmallTalkAgent",
     instructions="""You are SmallTalkAgent of PazarGlobal.
 
-🎯 Task: Handle greetings + casual chat, keep it warm and SHORT, and only rephrase/finalize outputs. You DO NOT drive the workflow.
-
-🔒 HARD SANDBOX RULES (CRITICAL)
-- You NEVER decide intent, NEVER call tools, NEVER change state.
-- You NEVER forward example commands to the router; you only show them as examples.
-- You ONLY rephrase system outputs or explain capabilities; you DO NOT execute.
-- If user asks for something actionable, you must ask them to type the explicit command (user-driven activation). Example: "iPhone 14 arayabilirim, 'iphone 14 arıyorum' yazman yeterli."
-- Phrases like "ben yaptım", "hemen arıyorum", "senin yerine yapıyorum" are forbidden.
-- You are the announcer/spokesperson (spiker), not the operator.
-
-🧭 TRIGGER COMMAND EXAMPLES (SHOW, NEVER EXECUTE)
-Listing creation/publish: "ilan ver", "ilan vermek istiyorum", "ilan oluştur", "ilan aç", "onayla", "yayınla".
-Edit/update: "düzelt", "değiştir", "fiyatı değiştir", "açıklamayı değiştir", "foto/resim ekle".
-Delete: "sil", "ilanı sil", "[n] nolu ilanı sil".
-Search: "X arıyorum", "[ürün] arıyorum", "[ürün] bak", "arama yap".
-Browse/list: "daha fazla ilan göster", "ilanlarımı göster", "[n] nolu ilanı göster" (örn: 1,2,15 nolu ilan).
-Other: "cüzdan bakiyesi", "iptal", "listeyi yenile".
-When user is vague, offer one explicit example from above; do NOT run it.
+🎯 Task: Handle greetings + casual chat, keep it warm and SHORT, and gently guide back to marketplace actions.
 
 💡 PERSONALIZATION:
 - If [USER_NAME: Full Name] → use name naturally (e.g., "Merhaba Emrah!").
@@ -1988,7 +1784,6 @@ When user is vague, offer one explicit example from above; do NOT run it.
 - Do NOT write long explanations or long lists.
 - At most ONE question.
 - If user just wants to "bakıp çıkıcam" or "sohbet/muhabbet" → allow it, but softly offer an action option.
-- When suggesting actions, present as optional and explicit (e.g., "örn: 'iphone 14 arıyorum'").
 - Avoid emojis unless the user uses them first.
 
 🎙️ TURKISH TTS VOICE OPTIMIZATION:
@@ -2016,7 +1811,6 @@ User: "sohbet edelim", "muhabbet", "kafa dağıt", konu dışı kısa konuşma
 Reply pattern:
 1) Short, friendly answer/acknowledgement.
 2) One gentle nudge: "Bu arada, aradığın bir ürün var mı?" OR "İlan vermeyi mi düşünüyorsun?"
-3) If user hints at an action (e.g., "iphone 14 var mı?") give an explicit example command, do NOT run it: "Arama yapabilmem için net komut yazman yeterli, örn: 'iphone 14 arıyorum'."
 
 ### MODE 3: INDECISIVE / UNDECIDED
 User: "kararsızım", "ne yapabilirim", "bakıyorum"
@@ -2033,7 +1827,7 @@ User asks about photo they sent: "ne görüyorsun", "bu nedir", "görseli anlat"
 Reply pattern:
 1) Extract title, category, condition, attributes from [VISION_PRODUCT] note in history.
 2) Natural description: "Görselde [title] görüyorum, [attributes], [condition] durumda."
-3) Ask: "İlan vermek ister misin?" If user is unsure, give explicit trigger example: "Başlatmak için 'ilan ver' ya da ürün adını yazabilirsin."
+3) Ask: "İlan vermek ister misin?"
 
 ❌ AVOID:
 - Long unnecessary explanations.
@@ -2211,240 +2005,6 @@ USER_LAST_SEARCH_RESULTS_STORE: Dict[str, List[Dict[str, Any]]] = {}
 USER_ACTIVE_LISTING_STORE: Dict[str, str] = {}
 
 
-def _draft_to_listing_data(draft: DraftState) -> Dict[str, Any]:
-    return {
-        "title": draft.title,
-        "description": draft.description,
-        "price": draft.price,
-        "category": draft.category,
-        "condition": draft.condition,
-        "location": draft.location,
-        "stock": draft.stock,
-        "metadata": draft.metadata,
-    }
-
-
-def _draft_from_record(rec: Dict[str, Any]) -> DraftState:
-    listing_data = rec.get("listing_data") or {}
-    images = rec.get("images") or []
-    vision_product = rec.get("vision_product") or {}
-    state_raw = rec.get("state") or "DRAFT"
-    return DraftState(
-        id=str(rec.get("id") or uuid.uuid4()),
-        user_id=str(rec.get("user_id")),
-        state=ListingState(state_raw) if state_raw in ListingState._value2member_map_ else ListingState.DRAFT,
-        title=listing_data.get("title"),
-        description=listing_data.get("description"),
-        price=listing_data.get("price"),
-        category=listing_data.get("category"),
-        condition=_normalize_condition_value(listing_data.get("condition")),
-        location=listing_data.get("location"),
-        stock=listing_data.get("stock", 1),
-        metadata=listing_data.get("metadata") or {},
-        images=list(images) if isinstance(images, list) else [],
-        vision_product=vision_product,
-    )
-
-
-async def db_get_active_draft(user_id: Optional[str]) -> Optional[DraftState]:
-    if not user_id:
-        return None
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        return None
-    url = f"{SUPABASE_URL}/rest/v1/active_drafts"
-    params = {"user_id": f"eq.{user_id}", "select": "*", "limit": 1}
-    headers = {
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, params=params, headers=headers)
-        if not resp.is_success:
-            return None
-        data = resp.json()
-        if isinstance(data, list) and data:
-            return _draft_from_record(data[0])
-    except Exception:
-        return None
-    return None
-
-
-async def db_upsert_active_draft(draft: DraftState) -> None:
-    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        return
-    url = f"{SUPABASE_URL}/rest/v1/active_drafts"
-    payload = {
-        "id": draft.id,
-        "user_id": draft.user_id,
-        "state": draft.state.value,
-        "listing_data": _draft_to_listing_data(draft),
-        "images": draft.images,
-        "vision_product": draft.vision_product,
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "apikey": SUPABASE_SERVICE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-        "Prefer": "resolution=merge-duplicates",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(url, json=payload, headers=headers)
-    except Exception:
-        return
-
-
-async def db_clear_active_draft(user_id: Optional[str]) -> None:
-    if not user_id:
-        return
-    if SUPABASE_URL and SUPABASE_SERVICE_KEY:
-        url = f"{SUPABASE_URL}/rest/v1/active_drafts"
-        params = {"user_id": f"eq.{user_id}"}
-        headers = {
-            "apikey": SUPABASE_SERVICE_KEY,
-            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-        }
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                await client.delete(url, params=params, headers=headers)
-        except Exception:
-            pass
-    USER_SAFE_MEDIA_STORE.pop(user_id, None)
-
-
-async def generate_structured_draft_update(
-    user_text: str,
-    vision_product: Optional[Dict[str, Any]],
-    existing_draft: Optional[DraftState]
-) -> Dict[str, Any]:
-    """LLM is used ONLY for structured field extraction; output must be deterministic JSON."""
-    vision_context = vision_product or {}
-    draft_context = existing_draft.publish_payload() if existing_draft else {}
-
-    system_prompt = (
-        "You are a deterministic field extractor for a marketplace draft. "
-        "Return ONLY JSON with keys: title, description, price, category, condition, location, metadata (object), images (array). "
-        "Never call tools. Keep it concise and do not include extra keys."
-    )
-
-    user_prompt = (
-        "User message: " + (user_text or "") + "\n"
-        f"Current draft: {json.dumps(draft_context, ensure_ascii=False)}\n"
-        f"Vision product summary (optional): {json.dumps(vision_context, ensure_ascii=False)}\n"
-        "Return JSON only."
-    )
-
-    try:
-        resp = await client.chat.completions.create(  # type: ignore[attr-defined]
-            model="gpt-4o-mini",
-            temperature=0.2,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-        content = resp.choices[0].message.content if resp.choices else "{}"
-        parsed = json.loads(content or "{}")
-        return parsed if isinstance(parsed, dict) else {}
-    except Exception:
-        return {}
-
-
-async def handle_listing_fsm(
-    intent: str,
-    user_text: str,
-    safe_media_paths: List[str],
-    vision_product: Optional[Dict[str, Any]],
-    active_draft: Optional[DraftState],
-) -> Optional[Dict[str, Any]]:
-    """Deterministic business engine for draft -> preview -> publish loop (Supabase-backed)."""
-
-    resolved_user_id = resolve_user_id()
-    if not resolved_user_id:
-        return {
-            "response": "Bu işlem için giriş yapmanız gerekiyor (aktif taslak yönetimi).",
-            "intent": intent,
-            "success": False,
-        }
-
-    draft = active_draft or DraftState(
-        id=str(uuid.uuid4()),
-        user_id=resolved_user_id,
-        state=ListingState.DRAFT,
-        vision_product=vision_product or {},
-    )
-    draft.merge_images(safe_media_paths)
-
-    if intent in {"create_listing", "update_listing_draft"}:
-        update = await generate_structured_draft_update(user_text, vision_product, draft)
-        if update.get("price") is not None:
-            update["price"] = _normalize_price_value(update.get("price"))
-        draft.apply_update(update)
-        # Ensure defaults for persisted draft
-        draft.stock = draft.stock if draft.stock is not None else 1
-        draft.metadata = _build_metadata(draft, vision_product)
-        draft.state = ListingState.PREVIEW if intent == "create_listing" else ListingState.EDIT
-        await db_upsert_active_draft(draft)
-        preview = draft.as_preview_text()
-        return {
-            "response": preview,
-            "intent": "create_listing",
-            "success": True,
-        }
-
-    if intent == "publish_listing":
-        if not draft.title:
-            return {
-                "response": "Taslakta başlık yok. Lütfen başlık ve temel bilgileri yazın.",
-                "intent": intent,
-                "success": False,
-            }
-        payload = draft.publish_payload()
-        payload_condition = _normalize_condition_value(payload.get("condition")) or "used"
-        payload_location = payload.get("location") or "Türkiye"
-        payload_stock = payload.get("stock") if payload.get("stock") is not None else 1
-        payload_metadata = _build_metadata(draft, vision_product)
-        result = await insert_listing(
-            title=payload.get("title"),
-            user_id=resolved_user_id,
-            price=payload.get("price"),
-            condition=payload_condition,
-            category=payload.get("category"),
-            description=payload.get("description"),
-            location=payload_location,
-            stock=payload_stock,
-            metadata=payload_metadata,
-            images=payload.get("images"),
-            listing_id=payload.get("listing_id"),
-            user_name=resolve_user_name(),
-            user_phone=resolve_user_phone(),
-        )
-        if not result.get("success"):
-            error_detail = result.get("error") or result.get("message") or result.get("result")
-            if not error_detail and result.get("status"):
-                error_detail = f"status={result.get('status')}"
-            if error_detail is not None and not isinstance(error_detail, str):
-                try:
-                    error_detail = json.dumps(error_detail, ensure_ascii=False)
-                except Exception:
-                    error_detail = str(error_detail)
-            return {
-                "response": f"İlan yayınlanamadı: {error_detail}",
-                "intent": intent,
-                "success": False,
-            }
-        await db_clear_active_draft(resolved_user_id)
-        return {
-            "response": f"✅ İlan yayınlandı! ID: {result.get('listing_id', draft.id)}",
-            "intent": intent,
-            "success": True,
-        }
-
-    return None
-
-
 # Main workflow runner
 async def run_workflow(workflow_input: WorkflowInput):
     """
@@ -2464,11 +2024,6 @@ async def run_workflow(workflow_input: WorkflowInput):
         )
         WORKFLOW_CONTEXT.set(ctx)
         workflow = workflow_input.model_dump()
-
-        # Deterministic media + vision context buffers
-        safe_media_paths: List[str] = []
-        blocked_media_paths: List[Dict[str, Any]] = []
-        first_safe_vision: Optional[Dict[str, Any]] = None
         
         # DEBUG: Log media paths to diagnose webchat image upload issue
         if workflow.get("media_paths"):
@@ -2705,6 +2260,10 @@ async def run_workflow(workflow_input: WorkflowInput):
             logger.warning(f"⚠️ User {user_id_key} tried to upload {len(media_paths)} photos, limiting to 10")
             media_paths = media_paths[:10]
 
+        safe_media_paths: List[str] = []
+        blocked_media_paths: List[Dict[str, Any]] = []
+        first_safe_vision: Optional[Dict[str, Any]] = None
+
         # VisionSafetyProductAgent only runs when explicit media is present
         if media_paths:
             for media_path in media_paths:
@@ -2877,27 +2436,6 @@ async def run_workflow(workflow_input: WorkflowInput):
                         }
                     ]
                 }))
-
-            # Deterministic FSM override: if active draft exists, keep user in draft loop unless explicitly publishing
-            resolved_user_for_draft = resolve_user_id(user_id_key)
-            active_draft = await db_get_active_draft(resolved_user_for_draft)
-            if active_draft and intent != "publish_listing":
-                # Stay in deterministic draft loop for any non-publish intent
-                intent = "update_listing_draft"
-
-            # Deterministic state machine handles draft → preview → publish without tool-calling agents
-            if intent in {"create_listing", "update_listing_draft", "publish_listing"}:
-                fsm_result = await handle_listing_fsm(
-                    intent=intent,
-                    user_text=raw_user_text_full,
-                    safe_media_paths=safe_media_paths,
-                    vision_product=(first_safe_vision or {}).get("product") if first_safe_vision else None,
-                    active_draft=active_draft,
-                )
-                if fsm_result is not None:
-                    fsm_result["safe_media_paths"] = safe_media_paths
-                    fsm_result["blocked_media_paths"] = blocked_media_paths
-                    return fsm_result
 
         # Authentication gate for protected intents
         auth_ctx = resolve_auth_context()
