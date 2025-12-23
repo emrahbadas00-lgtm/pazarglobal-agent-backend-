@@ -257,8 +257,11 @@ async def search_listings(
             print(f"⚠️ No Content-Range header, using count: {total_count}")
         
         print(f"📊 Returning: count={len(data)}, total={total_count}")
-
+        
         return {
+                # Explicitly log Supabase request params to diagnose mismatches (web vs WhatsApp)
+                print("🛰️ DEBUG Supabase params:", params)
+
             "success": True,
             "count": len(data),  # Number of results returned in this response
             "total": total_count,  # Total number of matching listings (might be > count)
