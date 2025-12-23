@@ -206,21 +206,19 @@ async def search_listings(
 
         data = resp.json()
 
-        # ⚡ PERFORMANCE: Only generate signed URL for FIRST image (lazy load rest)
-        # Before: 10 listings x 3 photos = 30 signed URL requests (~20-30s)
-        # After: 10 listings x 1 photo = 10 signed URL requests (~5-7s)
-        first_image_paths: List[str] = []
+        # Collect all image paths to sign in one request
+        all_paths: List[str] = []
         for item in data:
             imgs = item.get("images") if isinstance(item, dict) else None
-            if isinstance(imgs, list) and len(imgs) > 0:
-                first_img = imgs[0]
-                if isinstance(first_img, str):
-                    first_image_paths.append(first_img)
+            if isinstance(imgs, list):
+                for p in imgs:
+                    if isinstance(p, str):
+                        all_paths.append(p)
 
         signed_map: Dict[str, str] = {}
-        if first_image_paths:
+        if all_paths:
             # Preserve order but remove duplicates
-            unique_paths = list(dict.fromkeys(first_image_paths))
+            unique_paths = list(dict.fromkeys(all_paths))
             signed_map = await generate_signed_urls(unique_paths)
 
         # PERFORMANCE OPTIMIZATION: listings table already has user_name and user_phone (denormalized)
@@ -240,10 +238,9 @@ async def search_listings(
             item["owner_phone"] = owner_phone
 
             imgs = item.get("images") if isinstance(item.get("images"), list) else []
-            # Only first image signed URL (rest lazy loaded)
-            first_image_signed = signed_map.get(imgs[0]) if imgs and imgs[0] in signed_map else None
-            item["signed_images"] = [first_image_signed] if first_image_signed else []
-            item["first_image_signed_url"] = first_image_signed
+            signed_images = [signed_map[p] for p in imgs if isinstance(p, str) and p in signed_map]
+            item["signed_images"] = signed_images
+            item["first_image_signed_url"] = signed_images[0] if signed_images else None
 
             # Debug photo availability per listing (helps explain why frontend sees no images)
             try:
@@ -252,7 +249,7 @@ async def search_listings(
                     {
                         "id": item.get("id"),
                         "images_count": len(imgs),
-                        "first_image_signed": bool(first_image_signed),
+                        "signed_images_count": len(signed_images),
                     },
                 )
             except Exception:

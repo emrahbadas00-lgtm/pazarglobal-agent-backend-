@@ -3358,13 +3358,10 @@ async def run_workflow(workflow_input: WorkflowInput):
             elif any(phrase in user_text_lower for phrase in ["bakiye", "kredi", "cüzdan", "wallet", "balance", "param"]):
                 quick_intent = "wallet_query"
             
-            # 2. SELAMLAMA VE BASIT SOHBET (LLM'siz, cached)
-            # "selam", "merhaba", "nasılsın", "naber", "konuşalım mı" → small_talk
+            # 2. EN SONDA SELAMLAMA (sadece pure greeting ise)
+            # "selam" tek başınaysa veya "selam nasılsın" gibiyse → small_talk
             # Ama "selam araba var mı" → search olmalı (yukarıda yakalandı)
-            simple_chat_keywords = ["selam", "merhaba", "günaydın", "iyi günler", "hello", "hi", "hey", 
-                                   "nasılsın", "naber", "nasıl gidiyor", "ne yapıyorsun", 
-                                   "konuşalım", "sohbet", "muhabbet"]
-            if any(word in user_text_lower for word in simple_chat_keywords) and len(user_text_lower.split()) <= 5:
+            elif any(word in user_text_lower for word in ["selam", "merhaba", "günaydın", "iyi günler", "hello", "hi", "hey"]) and len(user_text_lower.split()) <= 3:
                 quick_intent = "small_talk"
             
             # Hızlı intent bulunduysa LLM'e gitme
@@ -3524,42 +3521,22 @@ async def run_workflow(workflow_input: WorkflowInput):
         elif intent == "small_talk":
             # OPTIMIZED: Basit selamlaşma için cached response (LLM'siz, ~50ms)
             user_name = resolve_user_name() or "değerli kullanıcımız"
-            user_text_lower = user_text.lower()
-            
-            # "nasılsın", "naber" gibi sorulara özel cevaplar
-            if any(word in user_text_lower for word in ["nasılsın", "naber", "nasıl gidiyor", "ne yapıyorsun"]):
-                cached_response = (
-                    f"İyiyim {user_name}, teşekkür ederim! 😊 Sen nasılsın?\n\n"
-                    "📦 İlan vermek için: Ürününün fotoğrafını gönder veya özelliklerini yaz\n"
-                    "🔍 Ürün aramak için: Ne aradığını söyle (örn: 'iPhone arıyorum')\n"
-                    "💰 Bakiyeni görmek için: 'bakiyem' yaz"
-                )
-            elif any(word in user_text_lower for word in ["konuşalım", "sohbet", "muhabbet"]):
-                cached_response = (
-                    f"Tabii {user_name}, buradayım! 😊 Sana nasıl yardımcı olabilirim?\n\n"
-                    "📦 Ürün satmak istiyorsan: Fotoğraf gönder veya detayları yaz\n"
-                    "🔍 Ürün arıyorsan: Ne tür bir ürün aradığını söyle\n"
-                    "❓ Sormak istediğin bir şey varsa çekinme!"
-                )
-            else:
-                # Normal selamlaşma
-                greeting_responses = [
-                    f"Selam {user_name}! 👋 PazarGlobal'e hoş geldin! 🛒\n\n"
-                    "✨ Ürün satmak istiyorsan: Satmak istediğin ürünün adını ve temel özelliklerini yaz.\n"
-                    "🔍 Ürün aramak istiyorsan: Ne tür bir ürün aradığını söyle (örneğin: 'ikinci el telefon', 'bebek arabası').\n\n"
-                    "Bugün PazarGlobal'de ne yapmak istersin?",
-                    
-                    f"Merhaba {user_name}! 🎉 Nasıl yardımcı olabilirim?\n\n"
-                    "📦 İlan vermek için: 'ilan vermek istiyorum' yaz\n"
-                    "🔍 Ürün aramak için: 'telefon arıyorum' gibi arama yap\n"
-                    "💰 Bakiyeni görmek için: 'bakiyem' yaz",
-                ]
+            greeting_responses = [
+                f"Selam {user_name}! 👋 PazarGlobal'e hoş geldin! 🛒\n\n"
+                "✨ Ürün satmak istiyorsan: Satmak istediğin ürünün adını ve temel özelliklerini yaz.\n"
+                "🔍 Ürün aramak istiyorsan: Ne tür bir ürün aradığını söyle (örneğin: 'ikinci el telefon', 'bebek arabası').\n\n"
+                "Bugün PazarGlobal'de ne yapmak istersin?",
                 
-                # Rastgele bir greeting seç
-                import random
-                cached_response = random.choice(greeting_responses)
+                f"Merhaba {user_name}! 🎉 Nasıl yardımcı olabilirim?\n\n"
+                "📦 İlan vermek için: 'ilan vermek istiyorum' yaz\n"
+                "🔍 Ürün aramak için: 'telefon arıyorum' gibi arama yap\n"
+                "💰 Bakiyeni görmek için: 'bakiyem' yaz",
+            ]
             
-            logger.info(f"⚡ Cached small_talk response kullanıldı (~50ms)")
+            # Rastgele bir greeting seç
+            import random
+            cached_response = random.choice(greeting_responses)
+            logger.info(f"⚡ Cached greeting response kullanıldı (~50ms)")
             
             return {
                 "response": cached_response,
