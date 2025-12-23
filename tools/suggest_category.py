@@ -20,7 +20,6 @@ CATEGORY_KEYWORDS = {
     "Anne & Bebek": ["bebek arabası", "mama sandalyesi", "oyuncak", "bebek odası", "emzirme", "bebek giysileri", "biberon"],
     "Hayvanlar": ["köpek", "kedi", "kuş", "akvaryum", "mama", "kafes", "evcil hayvan", "pet"],
     "Ev & Yaşam": ["mutfak", "tencere", "tabak", "çanak", "dekorasyon", "vazo", "lamba", "halı", "perde", "ev tekstili"],
-    "Sanat & Zanaat": ["tablo", "resim", "tuval", "kanvas", "eser", "sanat", "heykel", "seramik", "antik", "yağlı boya", "koleksiyonluk"],
 }
 
 
@@ -48,7 +47,6 @@ async def suggest_category(
     """
     
     text = (title + " " + (description or "")).lower()
-    normalized_user_category = (user_category or "").strip()
     
     # Score each category based on keyword matches
     scores = {}
@@ -90,14 +88,12 @@ async def suggest_category(
     }
     
     # Validate user's category if provided
-    if normalized_user_category:
-        user_lower = normalized_user_category.lower()
-        best_lower = best_category.lower()
-        is_correct = user_lower == best_lower or user_lower in best_lower or best_lower in user_lower
+    if user_category:
+        is_correct = user_category.lower() in best_category.lower() or best_category.lower() in user_category.lower()
         result["is_correct"] = is_correct
-        result["user_category"] = normalized_user_category
+        result["user_category"] = user_category
         
         if not is_correct:
-            result["warning"] = f"User selected '{normalized_user_category}' but AI suggests '{best_category}'"
+            result["warning"] = f"User selected '{user_category}' but AI suggests '{best_category}'"
     
     return result

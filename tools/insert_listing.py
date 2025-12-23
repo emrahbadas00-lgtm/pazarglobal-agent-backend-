@@ -11,7 +11,6 @@ from .wallet_tools import deduct_credits
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-CATEGORY_OVERRIDE_MIN_CONFIDENCE = float(os.getenv("CATEGORY_OVERRIDE_MIN_CONFIDENCE", "0.5"))
 
 
 def normalize_category_with_metadata(category: Optional[str], metadata: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -103,32 +102,19 @@ async def insert_listing(
         # Validate existing category
         print(f"🔍 Validating category: {category}")
         suggestion = await suggest_category(title, description, category)
-        suggestion_confidence = float(suggestion.get("confidence") or 0.0)
-        suggested_category = suggestion.get("suggested_category")
-        is_confident_override = (
-            suggestion.get("success")
-            and suggested_category
-            and suggestion_confidence >= CATEGORY_OVERRIDE_MIN_CONFIDENCE
-        )
-
-        if is_confident_override and not suggestion.get("is_correct", True):
+        if suggestion["success"] and not suggestion.get("is_correct", True):
             original_category = category
-            category = suggested_category
-            print("⚠️ Category mismatch detected!")
+            category = suggestion["suggested_category"]
+            print(f"⚠️ Category mismatch detected!")
             print(f"   User selected: {original_category}")
-            print(f"   AI suggests: {category} (confidence: {suggestion_confidence})")
-            print("   Auto-correcting to suggested category (confidence threshold met)")
-
+            print(f"   AI suggests: {category} (confidence: {suggestion['confidence']})")
+            print(f"   Auto-correcting to: {category}")
+            
             # Store original category in metadata for audit
             if metadata is None:
                 metadata = {}
             metadata["original_category"] = original_category
             metadata["category_corrected"] = True
-        elif suggestion.get("success") and not suggestion.get("is_correct", True):
-            print(
-                "ℹ️ Category mismatch detected but confidence too low "
-                f"({suggestion_confidence}); keeping user selection"
-            )
 
     # Align category with metadata (e.g., vehicle => Otomotiv)
     category = normalize_category_with_metadata(category, metadata)
