@@ -475,22 +475,12 @@ async def search_listings_tool(
                 listing_id = item.get("id")
                 if not listing_id:
                     continue
-                signed_images = []
-                raw_signed = item.get("signed_images")
-                if isinstance(raw_signed, list):
-                    signed_images = [str(url) for url in raw_signed[:3] if isinstance(url, str) and url]
-
                 compact.append({
                     "id": listing_id,
                     "title": item.get("title"),
                     "price": item.get("price"),
                     "category": item.get("category"),
                     "location": item.get("location"),
-                    "condition": item.get("condition"),
-                    "owner_name": item.get("owner_name"),
-                    "owner_phone": item.get("owner_phone"),
-                    "signed_images": signed_images,
-                    "description": item.get("description"),
                 })
             USER_LAST_SEARCH_RESULTS_STORE[user_key] = compact[:25]
 
@@ -2043,8 +2033,8 @@ class WorkflowInput(BaseModel):
 # TODO: Replace with Redis/DB for production; this is in-memory for now
 USER_SAFE_MEDIA_STORE: Dict[str, List[str]] = {}
 
-# Session store for last search results (rich data for detail view), so "1 nolu ilan" can be resolved even if history is pruned.
-# Format: {user_id: [{id,title,price,category,location,condition,owner_name,owner_phone,signed_images,description}, ...]}
+# Session store for last search results (compact), so "1 nolu ilan" can be resolved even if history is pruned.
+# Format: {user_id: [{id,title,price,category,location}, ...]}
 USER_LAST_SEARCH_RESULTS_STORE: Dict[str, List[Dict[str, Any]]] = {}
 
 # Session store for currently active listing (selected listing for update flows)
@@ -2179,30 +2169,17 @@ async def run_workflow(workflow_input: WorkflowInput):
             last = USER_LAST_SEARCH_RESULTS_STORE.get(user_id_key) or []
             if last:
                 lines: List[str] = []
-                photo_lines: List[str] = []
                 for i, item in enumerate(last[:10], start=1):
                     title = item.get("title") or ""
                     listing_id = item.get("id") or ""
                     if not listing_id:
                         continue
                     lines.append(f"#{i} id={listing_id} title={title}")
-                    signed_imgs = item.get("signed_images")
-                    if isinstance(signed_imgs, list) and signed_imgs:
-                        photo_lines.append(
-                            f"#{i} signed_images={' || '.join(str(url) for url in signed_imgs[:3])}"
-                        )
                 if lines:
                     conversation_history.append(cast(TResponseInputItem, {
                         "role": "assistant",
                         "content": [
                             {"type": "output_text", "text": "[LAST_SEARCH_RESULTS] " + " | ".join(lines)}
-                        ]
-                    }))
-                if photo_lines:
-                    conversation_history.append(cast(TResponseInputItem, {
-                        "role": "assistant",
-                        "content": [
-                            {"type": "output_text", "text": "[LAST_SEARCH_RESULT_PHOTOS] " + " | ".join(photo_lines)}
                         ]
                     }))
         
