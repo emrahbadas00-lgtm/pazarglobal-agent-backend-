@@ -2590,7 +2590,7 @@ async def handle_listing_fsm(
     vision_product: Optional[Dict[str, Any]],
     active_draft: Optional[DraftState],
 ) -> Optional[Dict[str, Any]]:
-    """Batch FSM: Maximum extraction + LLM enhancement + single preview."""
+    """Deterministic business engine for draft -> preview -> publish loop (Supabase-backed)."""
 
     resolved_user_id = resolve_user_id()
     if not resolved_user_id:
@@ -2609,13 +2609,14 @@ async def handle_listing_fsm(
     draft.merge_images(safe_media_paths)
 
     if intent in {"create_listing", "update_listing_draft"}:
-        # 1. Extract ALL fields at once (batch extraction)
+        # 1. Extract basic fields
         update = await generate_structured_draft_update(user_text, vision_product, draft)
         if update.get("price") is not None:
             update["price"] = _normalize_price_value(update.get("price"))
         draft.apply_update(update)
 
-        # 2. LLM Enhancement: Süsle (if title/description too short)
+        # 2. LLM Enhancement: Zenginleştir
+        # Eğer başlık çok kısa veya açıklama yok ise, LLM ile zenginleştir
         needs_enhancement = (
             (not draft.title or len(draft.title) < 20) or
             (not draft.description or len(draft.description) < 50)
@@ -2638,7 +2639,7 @@ async def handle_listing_fsm(
         draft.state = ListingState.PREVIEW if intent == "create_listing" else ListingState.EDIT
         await db_upsert_active_draft(draft)
         
-        # 4. Rich preview (single confirmation)
+        # 4. Rich preview
         preview = draft.as_preview_text()
         if _wants_description_suggestion(user_text):
             preview += "\n\n💡 Açıklamayı özelleştirmek için: 'açıklamayı değiştir' yazın."
