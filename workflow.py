@@ -436,15 +436,17 @@ def _build_description_suggestion(draft: DraftState) -> str:
 # Native function tool definitions (plain Python async functions)
 @function_tool
 async def clean_price_tool(price_text: Optional[str] = None) -> Dict[str, Optional[int]]:
-    """,
-        tools=[search_listings_tool, market_price_tool],
+    """
+    Fiyat metnini temizler ve sayısal değeri döndürür.
+    
     Args:
         price_text: Temizlenecek fiyat metni
         
     Returns:
         Temizlenmiş fiyat değeri (int veya None)
-    """,
-        tools=[search_listings_tool, market_price_tool],
+    """
+    return clean_price(price_text)
+
 
 @function_tool
 async def get_wallet_balance_tool(user_id: Optional[str] = None) -> Dict[str, Any]:
