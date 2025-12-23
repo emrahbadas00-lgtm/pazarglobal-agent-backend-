@@ -3164,51 +3164,27 @@ async def run_workflow(workflow_input: WorkflowInput):
                 ]
             }))
         
-        # Step 1: Classify intent (OPTIMIZED: Hızlı regex öncelikli, karmaşık durumlarda LLM)
+        # Step 1: Classify intent (ensure USER_CONTEXT note is part of history for personalization and ownership)
         if force_wallet_intent:
             intent = "wallet_query"
         else:
-            # HIZLI INTENT DETECTION (Regex-based, ~0ms)
-            user_text_lower = raw_user_text_full.lower().strip()
-            quick_intent = None
+            router_agent_intent_classifier_result_temp = await Runner.run(
+                router_agent_intent_classifier,
+                input=[*conversation_history],
+                run_config=RunConfig(trace_metadata={
+                    "__trace_source__": "agent-builder",
+                    "workflow_id": "wf_691884cc7e6081908974fe06852942af0249d08cf5054fdb"
+                })
+            )
             
-            # Selamlama kalıpları
-            if any(word in user_text_lower for word in ["selam", "merhaba", "günaydın", "iyi günler", "hello", "hi", "hey"]) and len(user_text_lower.split()) <= 3:
-                quick_intent = "small_talk"
-            # İlan verme kalıpları
-            elif any(phrase in user_text_lower for phrase in ["ilan ver", "satmak istiyorum", "sat", "ürün satmak", "ilan oluştur"]):
-                quick_intent = "create_listing"
-            # Arama kalıpları
-            elif any(phrase in user_text_lower for phrase in ["ara", "bul", "arıyorum", "satılık", "ikinci el"]) and "ilan" not in user_text_lower:
-                quick_intent = "search_listings"
-            # Cüzdan kalıpları
-            elif any(phrase in user_text_lower for phrase in ["bakiye", "kredi", "cüzdan", "wallet", "balance"]):
-                quick_intent = "wallet_query"
+            conversation_history.extend([item.to_input_item() for item in router_agent_intent_classifier_result_temp.new_items])
             
-            # Hızlı intent bulunduysa LLM'e gitme
-            if quick_intent:
-                intent = quick_intent
-                logger.info(f"⚡ Hızlı intent detection: {intent} (~0ms)")
-            else:
-                # Karmaşık durum: LLM'e sor
-                logger.info(f"🤔 Karmaşık mesaj, LLM intent classifier'a gidiyoruz...")
-                router_agent_intent_classifier_result_temp = await Runner.run(
-                    router_agent_intent_classifier,
-                    input=[*conversation_history],
-                    run_config=RunConfig(trace_metadata={
-                        "__trace_source__": "agent-builder",
-                        "workflow_id": "wf_691884cc7e6081908974fe06852942af0249d08cf5054fdb"
-                    })
-                )
-                
-                conversation_history.extend([item.to_input_item() for item in router_agent_intent_classifier_result_temp.new_items])
-                
-                router_agent_intent_classifier_result = {
-                    "output_text": router_agent_intent_classifier_result_temp.final_output.json(),
-                    "output_parsed": router_agent_intent_classifier_result_temp.final_output.model_dump()
-                }
-                
-                intent = router_agent_intent_classifier_result["output_parsed"]["intent"]
+            router_agent_intent_classifier_result = {
+                "output_text": router_agent_intent_classifier_result_temp.final_output.json(),
+                "output_parsed": router_agent_intent_classifier_result_temp.final_output.model_dump()
+            }
+            
+            intent = router_agent_intent_classifier_result["output_parsed"]["intent"]
 
         # Persist last intent in conversation_state and expose to downstream agents
         state_for_update = resolve_conversation_state()
@@ -3268,7 +3244,7 @@ async def run_workflow(workflow_input: WorkflowInput):
                 "success": False
             }
         
-        # Step 2: Route to appropriate agent (OPTIMIZED: Cached responses için small_talk)
+        # Step 2: Route to appropriate agent
         # TEMPORARILY DISABLED pin_request - causing 500 errors
         if intent == "pin_request":
             # Fallback to small_talk when PIN is requested but disabled
@@ -3280,32 +3256,6 @@ async def run_workflow(workflow_input: WorkflowInput):
                     "workflow_id": "wf_691884cc7e6081908974fe06852942af0249d08cf5054fdb"
                 })
             )
-        elif intent == "small_talk":
-            # OPTIMIZED: Basit selamlaşma için cached response (LLM'siz, ~50ms)
-            user_name = resolve_user_name() or "değerli kullanıcımız"
-            greeting_responses = [
-                f"Selam {user_name}! 👋 PazarGlobal'e hoş geldin! 🛒\n\n"
-                "✨ Ürün satmak istiyorsan: Satmak istediğin ürünün adını ve temel özelliklerini yaz.\n"
-                "🔍 Ürün aramak istiyorsan: Ne tür bir ürün aradığını söyle (örneğin: 'ikinci el telefon', 'bebek arabası').\n\n"
-                "Bugün PazarGlobal'de ne yapmak istersin?",
-                
-                f"Merhaba {user_name}! 🎉 Nasıl yardımcı olabilirim?\n\n"
-                "📦 İlan vermek için: 'ilan vermek istiyorum' yaz\n"
-                "🔍 Ürün aramak için: 'telefon arıyorum' gibi arama yap\n"
-                "💰 Bakiyeni görmek için: 'bakiyem' yaz",
-            ]
-            
-            # Rastgele bir greeting seç
-            import random
-            cached_response = random.choice(greeting_responses)
-            logger.info(f"⚡ Cached greeting response kullanıldı (~50ms)")
-            
-            return {
-                "response": cached_response,
-                "intent": "small_talk",
-                "safe_media_paths": safe_media_paths,
-                "blocked_media_paths": blocked_media_paths,
-            }
         elif intent == "create_listing":
             result = await Runner.run(
                 listingagent,
