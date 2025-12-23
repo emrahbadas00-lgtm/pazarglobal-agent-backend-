@@ -910,7 +910,7 @@ listingagent = Agent(
 🎯 Your task: EXTRACT from photo → ASK missing info in BATCH → AUTO-GENERATE title/description → ONE confirmation.
 
 ## 📸 STEP 1: AUTO-EXTRACT FROM PHOTO (if present)
-Look for [SYSTEM_MEDIA_NOTE] (VISION summary appended) or [VISION_PRODUCT] note in history. Extract:
+Look for [SYSTEM_MEDIA_NOTE] with vision analysis results. Extract:
 - **Brand** (e.g., "BMW", "Apple", "Samsung")
 - **Type** (e.g., "sedan", "SUV", "smartphone", "laptop")
 - **Color** (e.g., "siyah", "beyaz", "gri")
@@ -918,7 +918,7 @@ Look for [SYSTEM_MEDIA_NOTE] (VISION summary appended) or [VISION_PRODUCT] note 
 ⚠️ NEVER guess specific **model** from photo - always ask user!
 
 Example vision result:
-"[SYSTEM_MEDIA_NOTE] MEDIA_PATHS=['public/listings/abc.jpg'] | VISION: BMW sedan, siyah, temiz görünümlü"
+"[SYSTEM_MEDIA_NOTE] VISION: BMW sedan, siyah, temiz görünümlü"
 → Extract: brand="BMW", type="sedan", color="siyah", condition="used" (default if not "yeni")
 
 ## 📋 STEP 2: BATCH QUESTION (ASK ALL MISSING FIELDS TOGETHER)
@@ -2338,46 +2338,7 @@ async def run_workflow(workflow_input: WorkflowInput):
             safe_media_note_parts: List[str] = []
             if workflow.get("draft_listing_id"):
                 safe_media_note_parts.append(f"DRAFT_LISTING_ID={workflow['draft_listing_id']}")
-
-            vision_product_info: Dict[str, Any] = {}
-            vision_summary_text: Optional[str] = None
-            if first_safe_vision:
-                raw_product_info = first_safe_vision.get("product")
-                if isinstance(raw_product_info, dict):
-                    vision_product_info = raw_product_info
-                summary_bits: List[str] = []
-
-                def _append_summary_value(value: Any):
-                    if value is None:
-                        return
-                    value_str = str(value).strip()
-                    if not value_str:
-                        return
-                    if value_str.lower() in {"unknown", "none"}:
-                        return
-                    summary_bits.append(value_str)
-
-                _append_summary_value(vision_product_info.get("brand") or vision_product_info.get("title"))
-                _append_summary_value(vision_product_info.get("type") or vision_product_info.get("category"))
-                _append_summary_value(vision_product_info.get("color"))
-                _append_summary_value(vision_product_info.get("condition_hint") or vision_product_info.get("condition"))
-
-                attributes_for_summary = vision_product_info.get("attributes")
-                if isinstance(attributes_for_summary, list):
-                    attr_texts: List[str] = []
-                    for attr in attributes_for_summary:
-                        attr_str = str(attr).strip()
-                        if attr_str:
-                            attr_texts.append(attr_str)
-                    if attr_texts:
-                        summary_bits.append(", ".join(attr_texts[:2]))
-
-                if summary_bits:
-                    vision_summary_text = ", ".join(summary_bits)
-
             safe_media_note_parts.append(f"MEDIA_PATHS={safe_media_paths}")
-            if vision_summary_text:
-                safe_media_note_parts.append(f"VISION: {vision_summary_text}")
             safe_media_note_text = f"[SYSTEM_MEDIA_NOTE] {' | '.join(safe_media_note_parts)}"
             logger.info(f"📝 Adding SYSTEM_MEDIA_NOTE (SAFE MEDIA_PATHS) to conversation: {safe_media_note_text}")
             conversation_history.append(cast(TResponseInputItem, {
@@ -2396,7 +2357,7 @@ async def run_workflow(workflow_input: WorkflowInput):
 
             # Append compact product summary for downstream agents (use first safe image only)
             if first_safe_vision:
-                product_info = vision_product_info or {}
+                product_info: Dict[str, Any] = first_safe_vision.get("product") or {}
                 product_attrs = ", ".join(cast(List[str], product_info.get("attributes", []) or []))
                 conversation_history.append(cast(TResponseInputItem, {
                     "role": "assistant",
