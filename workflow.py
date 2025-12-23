@@ -1,67 +1,12 @@
-"""
-Pazarglobal Agent Workflow
-Refactored to use native function tools instead of MCP
-
-FUTURE FEATURE - PREMIUM LISTING STRATEGY (Phase 3.5):
-============================================================
-Premium listing feature will leverage current pagination system (5 listings at a time)
-for strategic monetization. This creates natural incentive for users to upgrade.
-
-IMPLEMENTATION PLAN:
--------------------
-1. Database Changes:
-   - ALTER TABLE listings ADD COLUMN is_premium BOOLEAN DEFAULT FALSE;
-   - ALTER TABLE listings ADD COLUMN premium_expires_at TIMESTAMP;
-   - CREATE INDEX idx_listings_premium ON listings(is_premium, created_at);
-
-2. search_listings_tool Enhancement:
-   - Add parameter: prioritize_premium: bool = True
-   - ORDER BY: is_premium DESC, created_at DESC
-   - First 5 results will always prioritize premium listings
-
-3. SearchAgent Display Format:
-   - Premium listings: ⭐ PREMIUM #1: [Title] - ÖNE ÇIKAN İLAN
-   - Normal listings: #3: [Title]
-   - Show premium count: "100 ilan bulundu (12 premium)"
-
-4. UX Flow Examples:
-   
-   Scenario A - Many Premium Listings:
-   User: "Araba arıyorum"
-   Agent: "100 ilan bulundu (12 premium). 5 göstereyim mi?"
-   User: "Göster"
-   Agent: Shows 5 premium listings first
-          "💡 Premium ilanlar öncelikli gösteriliyor!"
-   
-   Scenario B - Few Premium (Conversion Trigger):
-   User: "Otomotiv ilanları"
-   Agent: "50 ilan bulundu (2 premium). 5 göstereyim mi?"
-   User: "Göster"
-   Agent: Shows 2 premium + 3 normal
-          "💡 ⭐ Premium ilanlar listenin başında görünür!
-              İlanınızı öne çıkarmak için Premium üyelik edinin."
-
-5. Why Current System is Perfect Foundation:
-   - Small batches (5 at a time) → Clear premium visibility
-   - "Ask first" approach → Can show premium stats before display
-   - Limit parameter control → Easy to mix premium/normal intelligently
-   - Conversation context → Track pagination while maintaining premium priority
-
-6. Monetization Psychology:
-   - Normal user sees premium listings dominating first page
-   - "Why is my listing never in top 5?" → upgrade motivation
-   - Premium user gets immediate ROI visibility
-   - Transparent: "12 premium ilanlar var" shows competition level
-
-TODO: Implement after Phase 3 (Listing Management) is complete.
-============================================================
-"""
-# pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownArgumentType=false, reportMissingParameterType=false, reportMissingTypeArgument=false
 import os
+import asyncio
 import re
 import uuid
+import json
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from enum import Enum
+import httpx
 from agents import Agent, AgentOutputSchema, ModelSettings, TResponseInputItem, Runner, RunConfig, trace
 from agents.tool import function_tool
 from openai import AsyncOpenAI
@@ -102,6 +47,98 @@ list_user_listings: ListUserListingsFn = cast(ListUserListingsFn, _list_user_lis
 # Supabase public bucket info for constructing vision-safe URLs
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_PUBLIC_BUCKET = os.getenv("SUPABASE_PUBLIC_BUCKET", "product-images").strip("/")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+HYBRID_FLOW_ENABLED = os.getenv("HYBRID_FLOW_ENABLED", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
+VISION_MAX_CONCURRENCY = max(1, int(os.getenv("VISION_MAX_CONCURRENCY", "3") or "3"))
+
+
+def _hybrid_form_first_prompt(
+    *,
+    vision_product: Optional[Dict[str, Any]] = None,
+    has_photos: bool = False,
+) -> str:
+    title_hint = ""
+    if vision_product and isinstance(vision_product, dict):
+        vp_title = (vision_product.get("title") or "").strip()
+        vp_category = (vision_product.get("category") or "").strip()
+        if vp_title or vp_category:
+            title_hint = f"\n\nTespit: {vp_title or 'Ürün'}" + (f" (kategori: {vp_category})" if vp_category else "")
+
+    intro = "Fotoğrafları aldım. " if has_photos else ""
+    return (
+        f"{intro}İlanınızı hızlıca oluşturalım. Lütfen TEK mesajda şu bilgileri yazın:\n\n"
+        "1) Ürün adı/başlık\n"
+        "2) Fiyat (TL)\n"
+        "3) Konum (il/ilçe)\n"
+        "4) Durum (sıfır / az kullanılmış / ikinci el)\n"
+        "5) Kısa açıklama\n\n"
+        "Örnek: 'iPhone 14 Pro Max 256GB, 45.000 TL, İstanbul Kadıköy, temiz, kutulu-faturalı'\n\n"
+        "Not: Fiyat ve konum zorunludur." + title_hint
+    )
+
+
+def _should_offer_form_first(user_text: str) -> bool:
+    t = (user_text or "").strip().lower()
+    if not t:
+        return True
+
+    # If user only triggered the flow ("ilan ver" etc.) without details, ask for one-shot form.
+    trigger_phrases = (
+        "ilan ver",
+        "ilan oluştur",
+        "ilan olustur",
+        "satmak istiyorum",
+        "ürün sat",
+        "urun sat",
+        "yayınla",
+        "yayinla",
+    )
+    if any(p in t for p in trigger_phrases) and len(t.split()) <= 5:
+        return True
+    if len(t) <= 18:
+        return True
+    return False
+
+
+def _hybrid_photo_only_prompt(*, last_intent: Optional[str], vision_product: Optional[Dict[str, Any]], has_photos: bool) -> str:
+    # No caption text + photos: don't guess intent; offer the fastest path without blocking future flows.
+    base = _hybrid_form_first_prompt(vision_product=vision_product, has_photos=has_photos)
+    last = (last_intent or "").strip()
+    hint = ""
+    if last in {"search_product"}:
+        hint = "\n\nNot: Son mesajlarınız arama niyetindeydi. Ürün aramak istiyorsanız ne aradığınızı yazın (örn: 'iphone 14 pro max')."
+    return (
+        "Fotoğraf geldi ama açıklama yok. En hızlı yol aşağıdaki bilgileri tek mesajda yazmanız:\n\n"
+        + base
+        + hint
+        + "\n\nAlternatifler:\n"
+        "- Fiyat analizi için: 'fiyat' yazın (yakında)\n"
+        "- Ürün aramak için: Ne aradığınızı yazın (örn: 'koltuk takımı')\n"
+        "- İlan oluşturmak için: Yukarıdaki formu doldurun"
+    )
+
+
+def _is_affirmative(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    return t in {"evet", "e", "onayla", "onay", "tamam", "olur", "sil", "sildir", "yes", "ok"}
+
+
+def _is_negative(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    return t in {"hayır", "hayir", "h", "iptal", "vazgeç", "vazgec", "yok", "no"}
+
+
+def _title_from_last_results(user_key: str, listing_id: str) -> Optional[str]:
+    last = USER_LAST_SEARCH_RESULTS_STORE.get(user_key) or []
+    for item in last:
+        if str(item.get("id") or "") == str(listing_id):
+            title = (item.get("title") or "").strip()
+            return title or None
+    return None
 
 
 def _resolve_public_image_url(path: str) -> str:
@@ -113,6 +150,23 @@ def _resolve_public_image_url(path: str) -> str:
     if not SUPABASE_URL:
         return path
     return f"{SUPABASE_URL}/storage/v1/object/public/{SUPABASE_PUBLIC_BUCKET}/{path.lstrip('/')}"
+
+
+def _get_last_results_for_user(user_id: Optional[str], phone: Optional[str]) -> List[Dict[str, Any]]:
+    """Return last search results with graceful fallbacks (user_id → phone → anonymous)."""
+    if user_id and user_id in USER_LAST_SEARCH_RESULTS_STORE:
+        return USER_LAST_SEARCH_RESULTS_STORE.get(user_id) or []
+    if phone and phone in USER_LAST_SEARCH_RESULTS_STORE:
+        return USER_LAST_SEARCH_RESULTS_STORE.get(phone) or []
+    return USER_LAST_SEARCH_RESULTS_STORE.get("anonymous") or []
+
+
+def _set_active_listing_for_keys(listing_id: str, keys: List[str]) -> None:
+    """Persist active listing id for multiple keys to survive auth-context gaps."""
+    for key in keys:
+        if not key:
+            continue
+        USER_ACTIVE_LISTING_STORE[key] = listing_id
 
 
 @dataclass
@@ -196,8 +250,9 @@ def _extract_listing_number(text: str) -> Optional[int]:
         return None
     lowered = text.lower()
     patterns = [
-        r"\b(\d{1,3})\s*(?:nolu|no\.?|numaralı)\s*ilan\b",
+        r"\b(\d{1,3})\s*(?:[\.,]\s*)?(?:inci|ıncı|nci|ncı|uncu|üncü)?\s*ilan\b",  # "5. ilan" / "3üncü ilan"
         r"\bilan\s*#?\s*(\d{1,3})\b",
+        r"\b(\d{1,3})\s*(?:nolu|no\.?|numaralı)\s*ilan\b",
         r"\b#\s*(\d{1,3})\b",
     ]
     for pat in patterns:
@@ -211,20 +266,278 @@ def _extract_listing_number(text: str) -> Optional[int]:
             continue
     return None
 
+
+class ListingState(str, Enum):
+    """Deterministic FSM states for listing lifecycle."""
+
+    IDLE = "IDLE"
+    DRAFT = "DRAFT"
+    PREVIEW = "PREVIEW"
+    EDIT = "EDIT"
+    PUBLISH = "PUBLISH"
+
+
+@dataclass
+class DraftState:
+    """Deterministic draft record kept in backend (LLM-free)."""
+
+    id: str
+    user_id: str
+    state: ListingState = ListingState.DRAFT
+    title: Optional[str] = None
+    description: Optional[str] = None
+    price: Optional[int] = None
+    category: Optional[str] = None
+    condition: Optional[str] = None
+    location: Optional[str] = None
+    stock: Optional[int] = 1
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    images: List[str] = field(default_factory=list)
+    vision_product: Dict[str, Any] = field(default_factory=dict)
+
+    def merge_images(self, new_images: Optional[List[str]]) -> None:
+        """Merge new safe images into draft without duplicates."""
+        if not new_images:
+            return
+        seen = set(self.images)
+        for img in new_images:
+            if img and img not in seen:
+                self.images.append(img)
+                seen.add(img)
+
+    def apply_update(self, update: Dict[str, Any]) -> None:
+        """Apply structured update from LLM extraction to the draft."""
+        if not isinstance(update, dict):
+            return
+        for key in ("title", "description", "category", "location"):
+            if update.get(key):
+                setattr(self, key, update.get(key))
+        normalized_condition = _normalize_condition_value(update.get("condition"))
+        if normalized_condition:
+            self.condition = normalized_condition
+        if update.get("stock") is not None:
+            try:
+                self.stock = int(update.get("stock"))
+            except Exception:
+                pass
+        if update.get("price") is not None:
+            try:
+                self.price = int(update.get("price"))
+            except Exception:
+                pass
+        if isinstance(update.get("metadata"), dict):
+            self.metadata.update(update.get("metadata") or {})
+        if update.get("images"):
+            self.merge_images([str(img) for img in update.get("images") if img])
+
+    def as_preview_text(self) -> str:
+        """Render a rich preview with enhanced title and description."""
+        lines: List[str] = ["━━━━━━━━━━━━━━━━━━━━"]
+        lines.append("📝 **İlan Önizleme**")
+        lines.append("━━━━━━━━━━━━━━━━━━━━\n")
+        
+        # Başlık (kalın)
+        if self.title:
+            lines.append(f"**{self.title}**\n")
+        
+        # Fiyat (büyük, vurgulu)
+        if self.price is not None:
+            lines.append(f"💰 **{self.price:,} TL**\n")
+        
+        # Temel bilgiler (kompakt)
+        info_parts = []
+        if self.category:
+            info_parts.append(f"📂 {self.category}")
+        if self.condition:
+            display_condition = _condition_display(self.condition) or self.condition
+            info_parts.append(f"📦 {display_condition}")
+        location_display = self.location or "Türkiye"
+        info_parts.append(f"📍 {location_display}")
+        if info_parts:
+            lines.append(" | ".join(info_parts) + "\n")
+        
+        # Açıklama (formatlanmış)
+        if self.description:
+            lines.append("📄 **Açıklama:**")
+            # İlk 200 karakter önizleme
+            desc_preview = self.description[:200]
+            if len(self.description) > 200:
+                desc_preview += "..."
+            lines.append(desc_preview + "\n")
+        
+        # Özellikler (kategoriye göre)
+        if self.metadata:
+            lines.append("⚙️ **Özellikler:**")
+            # Kategori-specific formatting
+            if self.category == "Otomotiv":
+                if self.metadata.get("year"):
+                    lines.append(f"  • Yıl: {self.metadata['year']}")
+                if self.metadata.get("mileage"):
+                    lines.append(f"  • Km: {self.metadata['mileage']:,}")
+                if self.metadata.get("fuel_type"):
+                    lines.append(f"  • Yakıt: {self.metadata['fuel_type']}")
+            else:
+                # Genel metadata
+                for k, v in list(self.metadata.items())[:5]:  # Max 5 özellik
+                    lines.append(f"  • {k}: {v}")
+            lines.append("")
+        
+        # Fotoğraflar
+        if self.images:
+            lines.append(f"📸 **{len(self.images)} fotoğraf eklendi**\n")
+        
+        # Aksiyon butonları
+        lines.append("━━━━━━━━━━━━━━━━━━━━")
+        lines.append("✅ **ONAYLA** → İlanı yayınla")
+        lines.append("✏️ **DÜZELT** → Değişiklik yap")
+        lines.append("❌ **İPTAL** → Taslağı sil")
+        
+        return "\n".join(lines)
+
+    def publish_payload(self) -> Dict[str, Any]:
+        """Payload for insert_listing_tool; keeps deterministic fields only."""
+        return {
+            "title": self.title or "Başlık bekleniyor",
+            "price": self.price,
+            "condition": self.condition,
+            "category": self.category,
+            "description": self.description,
+            "location": self.location,
+            "stock": self.stock,
+            "metadata": self.metadata or None,
+            "images": self.images or None,
+            "listing_id": self.id,
+        }
+
+
+def _normalize_price_value(value: Any) -> Optional[int]:
+    """Normalize free-form price to int using existing cleaner."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return int(value)
+        except Exception:
+            return None
+    if isinstance(value, str):
+        cleaned = clean_price(value or "")
+        if isinstance(cleaned, dict):
+            return cleaned.get("clean_price")
+    return None
+
+
+def _normalize_condition_value(value: Optional[str]) -> Optional[str]:
+    """Map free-form condition to canonical values accepted by DB."""
+    if not value:
+        return None
+    normalized = str(value).strip().lower()
+    synonyms = {
+        "yeni": "new",
+        "sıfır": "new",
+        "sifir": "new",
+        "brand new": "new",
+        "kullanılmış": "used",
+        "kullanilmis": "used",
+        "ikinci el": "used",
+        "second hand": "used",
+        "used": "used",
+        "new": "new",
+        "refurbished": "refurbished",
+        "yenilenmiş": "refurbished",
+        "yenilenmis": "refurbished",
+    }
+    if normalized in synonyms:
+        return synonyms[normalized]
+    # Default to used if condition text exists but is unrecognized
+    return "used"
+
+
+def _condition_display(value: Optional[str]) -> Optional[str]:
+    """User-facing label for canonical condition values."""
+    if not value:
+        return value
+    display_map = {
+        "new": "Yeni",
+        "used": "Kullanılmış",
+        "refurbished": "Yenilenmiş",
+    }
+    return display_map.get(value, value)
+
+
+def _build_metadata(draft: DraftState, vision_product: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Ensure metadata always has a minimal type and merge vision attributes."""
+    metadata: Dict[str, Any] = {}
+    if isinstance(draft.metadata, dict):
+        metadata.update(draft.metadata)
+
+    vision = vision_product or draft.vision_product or {}
+    if isinstance(vision, dict):
+        if isinstance(vision.get("attributes"), dict):
+            metadata.update({k: v for k, v in vision.get("attributes", {}).items() if v is not None})
+        for key in ("brand", "model", "color", "storage", "year", "type", "category"):
+            if key in vision and vision.get(key) is not None:
+                metadata.setdefault(key, vision.get(key))
+
+    if "type" not in metadata:
+        if isinstance(vision, dict) and vision.get("type"):
+            metadata["type"] = vision.get("type")
+        else:
+            metadata["type"] = "general"
+
+    return metadata
+
+
+def _wants_description_suggestion(text: Optional[str]) -> bool:
+    """Detect if user explicitly asks for a description suggestion."""
+    lowered = (text or "").lower()
+    triggers = [
+        "açıklama öner",
+        "açıklama yaz",
+        "detaylı açıklama",
+        "metin öner",
+        "description öner",
+        "ilan açıklaması",
+        "güzel detaylı",
+    ]
+    return any(t in lowered for t in triggers)
+
+
+def _build_description_suggestion(draft: DraftState) -> str:
+    """Deterministic, LLM-free description suggestion based on current draft fields."""
+    title = draft.title or "Ürün"
+    condition_display = _condition_display(_normalize_condition_value(draft.condition)) or "Kullanılmış"
+    location = draft.location or "Türkiye"
+    price_text = f"Fiyat: {draft.price} TL." if draft.price else "Fiyat bilgisi ekleyebilirsiniz."
+
+    meta = draft.metadata or {}
+    attrs: List[str] = []
+    for key in ("brand", "model", "color", "storage", "year", "type", "category"):
+        val = meta.get(key)
+        if val:
+            attrs.append(str(val))
+
+    highlight = f"Öne çıkanlar: {', '.join(attrs)}." if attrs else "Öne çıkanlar: temiz kullanım, sorunsuz çalışır."
+
+    sentences = [
+        f"{title} {condition_display} durumda, {location} teslim/inceleme için hazır.",
+        price_text,
+        highlight,
+        "Bakımları yapıldı, alıcı isterse ekspertiz yaptırabilir."
+    ]
+    return " ".join(sentences)
+
 # Native function tool definitions (plain Python async functions)
 @function_tool
 async def clean_price_tool(price_text: Optional[str] = None) -> Dict[str, Optional[int]]:
-    """
-    Fiyat metnini temizler ve sayısal değeri döndürür.
-    
+    """Fiyat metnini temizleyip sayıya çevirir.
+
     Args:
         price_text: Temizlenecek fiyat metni
-        
-    Returns:
-        Temizlenmiş fiyat değeri (int veya None)
-    """
-    return clean_price(price_text)
 
+    Returns:
+        {"price": Temizlenmiş fiyat değeri (int veya None)}
+    """
+    return {"price": clean_price(price_text) if price_text else None}
 
 @function_tool
 async def get_wallet_balance_tool(user_id: Optional[str] = None) -> Dict[str, Any]:
@@ -438,6 +751,7 @@ async def search_listings_tool(
     max_price: Optional[int] = None,
     limit: int = 10,
     metadata_type: Optional[str] = None,
+    exclude_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Supabase'den ilan arar.
@@ -451,7 +765,29 @@ async def search_listings_tool(
         max_price: Maximum fiyat
         limit: Sonuç sayısı limiti
         metadata_type: Metadata type filter
+        exclude_user_id: Bu user_id'ye ait ilanları hariç tut (örn: "bana ait olmayan ilanlar")
     """
+    # Debug visibility for prod issues (Web vs WhatsApp result mismatch)
+    try:
+        print(
+            "🛰️ DEBUG search_listings_tool inputs:",
+            {
+                "query": query,
+                "category": category,
+                "condition": condition,
+                "location": location,
+                "min_price": min_price,
+                "max_price": max_price,
+                "limit": limit,
+                "metadata_type": metadata_type,
+                "exclude_user_id": exclude_user_id,
+                "resolved_user_id": resolve_user_id(),
+                "resolved_phone": resolve_user_phone(),
+            },
+        )
+    except Exception:
+        pass
+
     result = await search_listings(
         query=query,
         category=category,
@@ -460,12 +796,14 @@ async def search_listings_tool(
         min_price=min_price,
         max_price=max_price,
         limit=limit,
-        metadata_type=metadata_type
+        metadata_type=metadata_type,
+        exclude_user_id=exclude_user_id
     )
 
     # Persist last search results per user so follow-ups like "1 nolu ilan" stay deterministic
     try:
         user_key = resolve_user_id() or "anonymous"
+        phone_key = resolve_user_phone()
         if isinstance(result, dict) and result.get("success") and isinstance(result.get("results"), list):
             compact: List[Dict[str, Any]] = []
             for item in cast(List[Any], result.get("results") or []):
@@ -480,8 +818,55 @@ async def search_listings_tool(
                     "price": item.get("price"),
                     "category": item.get("category"),
                     "location": item.get("location"),
+                    "condition": item.get("condition"),
+                    "description": item.get("description"),
+                    "signed_images": item.get("signed_images") or item.get("images") or [],
+                    "user_name": item.get("user_name") or item.get("owner_name"),
+                    "user_phone": item.get("user_phone") or item.get("owner_phone"),
                 })
+            # Store under multiple keys so later authenticated requests can reuse cached list
             USER_LAST_SEARCH_RESULTS_STORE[user_key] = compact[:25]
+            if phone_key:
+                USER_LAST_SEARCH_RESULTS_STORE[phone_key] = compact[:25]
+            if user_key != "anonymous" and "anonymous" in USER_LAST_SEARCH_RESULTS_STORE and not USER_LAST_SEARCH_RESULTS_STORE.get("anonymous"):
+                USER_LAST_SEARCH_RESULTS_STORE["anonymous"] = compact[:25]
+
+            # Add [SEARCH_CACHE] to result for frontend listing cards (trim to first 5 listings)
+            if compact and isinstance(result, dict):
+                import json
+                cache_listings = compact[:5]  # Max 5 for cache
+                # Trim description and signed_images
+                for listing in cache_listings:
+                    if listing.get("description") and len(listing["description"]) > 160:
+                        listing["description"] = listing["description"][:160] + "..."
+                    if listing.get("signed_images") and len(listing["signed_images"]) > 3:
+                        listing["signed_images"] = listing["signed_images"][:3]
+                
+                cache_json = json.dumps({"results": cache_listings}, ensure_ascii=False)
+                result["search_cache"] = f"[SEARCH_CACHE]{cache_json}"
+
+                # Debug photo counts in cache to diagnose missing images on frontend
+                try:
+                    print(
+                        "🛰️ DEBUG search_cache photos",
+                        [
+                            {
+                                "id": l.get("id"),
+                                "signed_images_count": len(l.get("signed_images") or []),
+                            }
+                            for l in cache_listings
+                        ],
+                    )
+                except Exception:
+                    pass
+
+            # To avoid photo links in list view, strip signed_images/images before returning to agent (detail uses cached copy).
+            for item in cast(List[Any], result.get("results") or []):
+                if isinstance(item, dict):
+                    if "signed_images" in item:
+                        item["signed_images"] = []
+                    if "images" in item:
+                        item["images"] = []
     except Exception:
         pass
 
@@ -529,7 +914,7 @@ async def update_listing_tool(
         # Try mapping from last search results: "1 nolu ilan" → stored result id
         num = _extract_listing_number(listing_id_candidate)
         if num is not None:
-            last = USER_LAST_SEARCH_RESULTS_STORE.get(resolved_user_id) or []
+            last = _get_last_results_for_user(resolved_user_id, resolve_user_phone())
             idx = num - 1
             if 0 <= idx < len(last):
                 mapped_id = last[idx].get("id")
@@ -543,9 +928,12 @@ async def update_listing_tool(
         if active and _is_uuid(str(active)):
             listing_id_candidate = str(active)
         else:
-            active_store = USER_ACTIVE_LISTING_STORE.get(resolved_user_id)
-            if active_store and _is_uuid(str(active_store)):
-                listing_id_candidate = str(active_store)
+            # fall back across user_id, phone, anonymous to survive auth gaps
+            for key in (resolved_user_id, resolve_user_phone(), "anonymous"):
+                active_store = USER_ACTIVE_LISTING_STORE.get(key)
+                if active_store and _is_uuid(str(active_store)):
+                    listing_id_candidate = str(active_store)
+                    break
 
     if not _is_uuid(listing_id_candidate):
         return {
@@ -762,11 +1150,12 @@ router_agent_intent_classifier = Agent(
 You classify user messages into one of the following marketplace intents.
 Respond ONLY with valid JSON following the schema.
 
-## Valid Intents:
-- **"create_listing"** → user wants to SELL an item OR editing a DRAFT listing (not yet published)
-- **"update_listing"** → user wants to CHANGE an EXISTING published listing (after "İlan yayınlandı" message)
+## Valid Intents (deterministic FSM aware):
+- **"create_listing"** → user wants to start or continue a DRAFT (new listing flow)
+- **"update_listing_draft"** → user edits an UNPUBLISHED draft (preview/edit loop)
+- **"publish_listing"** → user CONFIRMS draft and wants to finalize
+- **"update_listing"** → user wants to CHANGE an EXISTING PUBLISHED listing (after "İlan yayınlandı" message)
 - **"delete_listing"** → user wants to DELETE/REMOVE existing listing
-- **"publish_listing"** → user CONFIRMS listing (wants to finalize and publish)
 - **"search_product"** → user wants to BUY or SEARCH
 - **"wallet_query"** → user asks about wallet balance/credits/transactions
 - **"small_talk"** → greetings, casual conversation
@@ -778,9 +1167,9 @@ Respond ONLY with valid JSON following the schema.
 → User is in DRAFT/PREVIEW mode (listing not yet published)
 
 **In this context:**
-- "fiyat X olsun" → **create_listing** (editing draft)
-- "başlık değiştir" → **create_listing** (editing draft)  
-- "açıklama değiştir" → **create_listing** (editing draft)
+- "fiyat X olsun" → **update_listing_draft** (editing draft)
+- "başlık değiştir" → **update_listing_draft** (editing draft)  
+- "açıklama değiştir" → **update_listing_draft** (editing draft)
 - "onayla" / "yayınla" → **publish_listing** (finalize draft)
 - "iptal" → **cancel**
 
@@ -826,7 +1215,7 @@ Respond with JSON only: {"intent": "create_listing"}
 - Separate list items with commas: "İlan ver, ürün ara, yardım al"
 - Keep sentences short (max 15 words) for better voice clarity
 """,
-    model="gpt-4o",
+    model="gpt-5-mini",
     output_type=RouterAgentIntentClassifierSchema,
     model_settings=ModelSettings(
         store=True
@@ -1175,6 +1564,7 @@ If user asks "işlemlerim", "harcamalarım", "geçmiş":
 
 searchagent = Agent(
     name="SearchAgent",
+    model="gpt-5-mini",
     instructions="""You are SearchAgent of PazarGlobal.
 
 ⚠️ CRITICAL: NEVER respond with JSON or structured data like {"intent":"search_product"}.
@@ -1202,17 +1592,22 @@ When user searches: "araba var mı", "kiralık ev", "iPhone"
 
 **MODE 2: DETAIL MODE**
 When user says: "1 nolu ilanı göster", "2 nolu ilan", "ilk ilanı göster"
+→ ⚠️ **DO NOT CALL search_listings_tool!** 
 → Check conversation history for last search results
 → Find the listing by number (1st result = #1, 2nd = #2, etc.)
 → ⚠️ CRITICAL: Show FULL DETAIL with ALL signed_images URLs (the listing object has 'signed_images' array)
 → Format each URL on separate line for WhatsApp compatibility
 
 Detection keywords for DETAIL MODE:
-- "X nolu ilan" / "X numaralı ilan" / "X. ilan"
+- "X nolu ilan" / "X numaralı ilan" / "X. ilan" (where X is a number like 1, 2, 3...)
 - "ilk ilan" / "birinci ilan" → #1
 - "ikinci ilan" → #2
 - "son ilan" → last one
 - "detay" / "detaylı göster" + ilan number
+
+⚠️ **CRITICAL: Numbers alone (1, 2, 3, etc.) are NOT valid search queries!**
+- If user says "2 nolu ilanı göster" → MODE 2 (find from history)
+- If user says "2 adet araba" → Normal search with metadata filter
 
 If user asks for listing # > total results:
 → "Bu aramada sadece [N] ilan var. 1-[N] arası numara seçebilirsiniz."
@@ -1260,14 +1655,25 @@ Detection keywords for SHOW MORE MODE:
    ❌ ONLY category (NO query) when very generic:
    - "ev varmı" → query=None, category="Emlak" (show ALL emlak)
    - "araba var mı" → query=None, category="Otomotiv" (show ALL cars)
+   - "araba almak istiyorum" → query=None, category="Otomotiv" (show ALL cars)
+   - "araba arıyorum" → query=None, category="Otomotiv" (show ALL cars)
+   - "satılık araba" → query="satılık", category="Otomotiv" (HAS specific keyword!)
+   - "citroen var mı" → query="citroen", category="Otomotiv" (HAS brand!)
+   
+   ❌ NEVER use these as query:
+   - Numbers alone: "2", "3", "5" → These are for detail mode, NOT search!
+   - Action verbs: "almak", "aramak", "görmek", "istiyorum"
+   - Generic terms without category: "var mı", "neler var"
    
    🎯 RULE: Specific keywords (brand, location, features) → Use query!
    🎯 RULE: Generic category-only requests → category=X, query=None
    🎯 RULE: Mixed (generic+specific) → Use BOTH query AND category!
+   🎯 RULE: Action verbs → IGNORE! Only extract nouns/adjectives!
    
    Special cases:
    - "sitedeki ilanları göster" → query=None, category=None (show ALL)
-   - "neler var" → query=None, category=None (show ALL)
+   - "neler var" → query=None, category=None (show ALL with limit=5)
+   - "tüm ilanları göster" → query=None, category=None (show ALL with limit=5, then user can say "daha fazla")
    
 2. **category** → Infer category from context (SMART INFERENCE)
    ⚠️ IMPORTANT: Use your reasoning to infer category from user's keywords!
@@ -1353,13 +1759,16 @@ Detection keywords for SHOW MORE MODE:
 
 ⚠️ CRITICAL: PREFER SIMPLE SEARCHES + SMALL LIMITS FOR SPEED!
 
-**Strategy 1: Category-only (for very generic requests)**
-- User: "ev varmı" → category="Emlak", query=None, limit=5 (show first 5 Emlak listings)
-- User: "araba var mı" → category="Otomotiv", query=None, limit=5 (show first 5 cars)
-- WHY: Shows sample listings quickly, user can browse or refine search
-- ALWAYS use limit=5 for category-only to avoid timeout!
+**Strategy 1: Query + Category (ALWAYS USE BOTH!)**
+- User: "ev varmı" → query="ev", category="Emlak", limit=5
+- User: "araba var mı" → query="araba", category="Otomotiv", limit=5
+- User: "daire varmı" → query="daire", category="Emlak", limit=5
+- User: "telefon var mı" → query="telefon", category="Elektronik", limit=5
+- WHY: Query filter is REQUIRED for accurate results! Never search with only category.
+- ALWAYS extract main search keyword from user message as query parameter!
+- EXCEPTION: Only use query=None if user says "tüm [category] ilanları" or "hepsini göster"
 
-**Strategy 2: Query + Category (BEST for specific features)**
+**Strategy 2: Query + Category + Filters (for specific features)**
 - User: "kiralık daire varmı" → query="kiralık", category="Emlak"
 - User: "satılık ev" → query="satılık", category="Emlak"
 - User: "bahçe kat" → query="bahçe kat", category="Emlak"
@@ -1419,9 +1828,13 @@ Show compact summary WITHOUT images or long URLs:
 
 "🔍 [category name if used] kategorisinde toplam [USE 'total' FIELD FROM TOOL RESPONSE] ilan bulundu.
 
-İsterseniz size 5 ilan göstereyim, ya da spesifik arama yapabilirsiniz.
-→ '5 ilan göster' yazın
+İsterseniz size [min(total, 5)] ilan göstereyim, ya da spesifik arama yapabilirsiniz.
+→ '[min(total, 5)] ilan göster' yazın
 → Spesifik arama: Örn: 'BMW', 'kiralık daire', 'iPhone 14'"
+
+⚠️ IMPORTANT: Use actual number from 'total' field (max 5):
+- If total=2: "2 ilan göstereyim" and "2 ilan göster"
+- If total=5+: "5 ilan göstereyim" and "5 ilan göster"
 
 ⚠️ CRITICAL EXAMPLE:
 Tool response: {"success": true, "total": 6, "count": 5, "results": [...]}
@@ -1553,10 +1966,13 @@ Detay için ilan #[number] not edin."
 3. Show full detail with ALL signed_images URLs⚠️ CATEGORY MISMATCH DETECTION:
 
 **CACHE THE RESULTS FOR DETAIL REQUESTS:**
-- After you show the compact list, append a single hidden line (do NOT explain it) in this exact format:
-    `[SEARCH_CACHE]{"results": [ {"id": "...", "title": "...", "price": 123, "location": "...", "condition": "...", "category": "...", "description": "...", "signed_images": ["url1", "url2"], "user_name": "...", "user_phone": "..." } ]}`
-- Keep at most the listings you just showed (max 5) and keep description short (<=160 chars). Trim signed_images to max 3 per listing.
-- Place this line at the very end of your message so it can be stripped before sending to the user.
+- **CRITICAL:** When search_listings_tool returns a result with 'search_cache' field, you MUST append that exact string to the END of your message.
+- The 'search_cache' field contains: `[SEARCH_CACHE]{"results": [...]}`
+- Example: If tool returns {"success": true, "results": [...], "search_cache": "[SEARCH_CACHE]{...}"}, append the search_cache value to your final response.
+- Place this at the very end of your message (after all listings and hints).
+- Do NOT explain or modify this cache line - just append it verbatim.
+- This enables the frontend to render interactive listing cards.
+
 If you find listings but category doesn't match query intent:
 → Example: User searches "bisiklet" (expect: Spor) but found in "Otomotiv"
 → Show warning:
@@ -1634,7 +2050,6 @@ When user asks for price estimate: "bu ürünün fiyatı ne olmalı", "fiyat ön
 - If market_price_tool returns error (no similar products) → Only show site average
 - Always explain which data source is more reliable
 - Use similarity_threshold=0.5 for market_price_tool""",
-    model="gpt-4o-mini",
     tools=[search_listings_tool, market_price_tool],
     model_settings=ModelSettings(
         store=True
@@ -1748,7 +2163,7 @@ Tools available:
 - get_wallet_balance_tool
 
 NEVER use insert_listing_tool!""",
-    model="gpt-4o",
+    model="gpt-5-mini",
     tools=[update_listing_tool, list_user_listings_tool, clean_price_tool, add_premium_badge_tool, renew_listing_tool, get_wallet_balance_tool],
     model_settings=ModelSettings(
         store=True
@@ -1760,7 +2175,29 @@ smalltalkagent = Agent(
     name="SmallTalkAgent",
     instructions="""You are SmallTalkAgent of PazarGlobal.
 
-🎯 Task: Handle greetings + casual chat, keep it warm and SHORT, and gently guide back to marketplace actions.
+🎯 Task: Handle greetings + casual chat, keep it warm and SHORT, and only rephrase/finalize outputs. You DO NOT drive the workflow.
+
+🔒 HARD SANDBOX RULES (CRITICAL)
+- You NEVER decide intent, NEVER call tools, NEVER change state.
+- You NEVER forward example commands to the router; you only show them as examples.
+- You ONLY rephrase system outputs or explain capabilities; you DO NOT execute.
+- If user asks for something actionable, you must ask them to type the explicit command (user-driven activation). Example: "iPhone 14 arayabilirim, 'iphone 14 arıyorum' yazman yeterli."
+- Phrases like "ben yaptım", "hemen arıyorum", "senin yerine yapıyorum" are forbidden.
+- You are the announcer/spokesperson (spiker), not the operator.
+
+🚫 NO INVENTED DATA (CRITICAL):
+- NEVER state listing counts, ownership, prices, or names without a tool result.
+- You cannot fetch data (no tools). If user asks "kaç ilanım var?", "bu ilan kime ait?", "bana ait olmayan ilanları göster" → answer briefly that you can’t see it and suggest the exact command (e.g., "ilanlarımı göster", "[ürün] arıyorum", "1 nolu ilanı göster").
+- NEVER make up owner names/phones. If not provided in context, say you don’t have that info.
+
+🧭 TRIGGER COMMAND EXAMPLES (SHOW, NEVER EXECUTE)
+Listing creation/publish: "ilan ver", "ilan vermek istiyorum", "ilan oluştur", "ilan aç", "onayla", "yayınla".
+Edit/update: "düzelt", "değiştir", "fiyatı değiştir", "açıklamayı değiştir", "foto/resim ekle".
+Delete: "sil", "ilanı sil", "[n] nolu ilanı sil".
+Search: "X arıyorum", "[ürün] arıyorum", "[ürün] bak", "arama yap".
+Browse/list: "daha fazla ilan göster", "ilanlarımı göster", "[n] nolu ilanı göster" (örn: 1,2,15 nolu ilan).
+Other: "cüzdan bakiyesi", "iptal", "listeyi yenile".
+When user is vague, offer one explicit example from above; do NOT run it.
 
 💡 PERSONALIZATION:
 - If [USER_NAME: Full Name] → use name naturally (e.g., "Merhaba Emrah!").
@@ -1784,6 +2221,7 @@ smalltalkagent = Agent(
 - Do NOT write long explanations or long lists.
 - At most ONE question.
 - If user just wants to "bakıp çıkıcam" or "sohbet/muhabbet" → allow it, but softly offer an action option.
+- When suggesting actions, present as optional and explicit (e.g., "örn: 'iphone 14 arıyorum'").
 - Avoid emojis unless the user uses them first.
 
 🎙️ TURKISH TTS VOICE OPTIMIZATION:
@@ -1811,6 +2249,7 @@ User: "sohbet edelim", "muhabbet", "kafa dağıt", konu dışı kısa konuşma
 Reply pattern:
 1) Short, friendly answer/acknowledgement.
 2) One gentle nudge: "Bu arada, aradığın bir ürün var mı?" OR "İlan vermeyi mi düşünüyorsun?"
+3) If user hints at an action (e.g., "iphone 14 var mı?") give an explicit example command, do NOT run it: "Arama yapabilmem için net komut yazman yeterli, örn: 'iphone 14 arıyorum'."
 
 ### MODE 3: INDECISIVE / UNDECIDED
 User: "kararsızım", "ne yapabilirim", "bakıyorum"
@@ -1827,7 +2266,7 @@ User asks about photo they sent: "ne görüyorsun", "bu nedir", "görseli anlat"
 Reply pattern:
 1) Extract title, category, condition, attributes from [VISION_PRODUCT] note in history.
 2) Natural description: "Görselde [title] görüyorum, [attributes], [condition] durumda."
-3) Ask: "İlan vermek ister misin?"
+3) Ask: "İlan vermek ister misin?" If user is unsure, give explicit trigger example: "Başlatmak için 'ilan ver' ya da ürün adını yazabilirsin."
 
 ❌ AVOID:
 - Long unnecessary explanations.
@@ -1861,11 +2300,18 @@ Yeni bir işlem için:
 - Keep tone friendly and clear
 
 🚫 No tools needed.""",
-    model="gpt-4.1-mini",
+    model="gpt-5-nano",
     model_settings=ModelSettings(
         store=True
     )
 )
+
+
+async def _clear_active_draft_for_current_user():
+    """Helper to clear persisted draft for current user."""
+    resolved_user_id = resolve_user_id()
+    if resolved_user_id:
+        await db_clear_active_draft(resolved_user_id)
 
 
 # TEMPORARILY DISABLED - causing 500 errors with mcp_security connection
@@ -1946,6 +2392,11 @@ Delete user's listings.
 - No bullet lists, no long explanations.
 - At most ONE question.
 
+🚫 BULK DELETE POLICY:
+- Do NOT claim to delete multiple listings at once.
+- If user says "tüm ilanlarımı / hepsini / tüm iPhone 13'leri sil": explain only one-by-one delete is supported and ask which one (by number) to delete now.
+- Only proceed with a single listing id per confirmation.
+
 🔢 HOW TO HANDLE "X NOLU İLAN":
 - ALWAYS call list_user_listings_tool first (order=created_at.desc, same as search).
 - Map the user’s request number (1-based) to that list: #1 = first item, #2 = second, etc.
@@ -1969,7 +2420,7 @@ ALWAYS ask confirmation before deleting!
 Tools:
 - list_user_listings_tool
 - delete_listing_tool""",
-    model="gpt-4o-mini",
+    model="gpt-5-mini",
     tools=[delete_listing_tool, list_user_listings_tool],
     model_settings=ModelSettings(
         store=True
@@ -2005,6 +2456,362 @@ USER_LAST_SEARCH_RESULTS_STORE: Dict[str, List[Dict[str, Any]]] = {}
 USER_ACTIVE_LISTING_STORE: Dict[str, str] = {}
 
 
+def _draft_to_listing_data(draft: DraftState) -> Dict[str, Any]:
+    return {
+        "title": draft.title,
+        "description": draft.description,
+        "price": draft.price,
+        "category": draft.category,
+        "condition": draft.condition,
+        "location": draft.location,
+        "stock": draft.stock,
+        "metadata": draft.metadata,
+    }
+
+
+def _draft_from_record(rec: Dict[str, Any]) -> DraftState:
+    listing_data = rec.get("listing_data") or {}
+    images = rec.get("images") or []
+    vision_product = rec.get("vision_product") or {}
+    state_raw = rec.get("state") or "DRAFT"
+    return DraftState(
+        id=str(rec.get("id") or uuid.uuid4()),
+        user_id=str(rec.get("user_id")),
+        state=ListingState(state_raw) if state_raw in ListingState._value2member_map_ else ListingState.DRAFT,
+        title=listing_data.get("title"),
+        description=listing_data.get("description"),
+        price=listing_data.get("price"),
+        category=listing_data.get("category"),
+        condition=_normalize_condition_value(listing_data.get("condition")),
+        location=listing_data.get("location"),
+        stock=listing_data.get("stock", 1),
+        metadata=listing_data.get("metadata") or {},
+        images=list(images) if isinstance(images, list) else [],
+        vision_product=vision_product,
+    )
+
+
+async def db_get_active_draft(user_id: Optional[str]) -> Optional[DraftState]:
+    if not user_id:
+        return None
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return None
+    url = f"{SUPABASE_URL}/rest/v1/active_drafts"
+    params = {"user_id": f"eq.{user_id}", "select": "*", "limit": 1}
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, params=params, headers=headers)
+        if not resp.is_success:
+            return None
+        data = resp.json()
+        if isinstance(data, list) and data:
+            return _draft_from_record(data[0])
+    except Exception:
+        return None
+    return None
+
+
+async def db_upsert_active_draft(draft: DraftState) -> None:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return
+    url = f"{SUPABASE_URL}/rest/v1/active_drafts"
+    payload = {
+        "id": draft.id,
+        "user_id": draft.user_id,
+        "state": draft.state.value,
+        "listing_data": _draft_to_listing_data(draft),
+        "images": draft.images,
+        "vision_product": draft.vision_product,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Prefer": "resolution=merge-duplicates",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(url, json=payload, headers=headers)
+    except Exception:
+        return
+
+
+async def db_clear_active_draft(user_id: Optional[str]) -> None:
+    if not user_id:
+        return
+    if SUPABASE_URL and SUPABASE_SERVICE_KEY:
+        url = f"{SUPABASE_URL}/rest/v1/active_drafts"
+        params = {"user_id": f"eq.{user_id}"}
+        headers = {
+            "apikey": SUPABASE_SERVICE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.delete(url, params=params, headers=headers)
+        except Exception:
+            pass
+    USER_SAFE_MEDIA_STORE.pop(user_id, None)
+
+
+async def enhance_draft_with_llm(
+    draft: DraftState,
+    vision_product: Optional[Dict[str, Any]] = None
+) -> Dict[str, str]:
+    """
+    LLM zenginleştirme: Minimum bilgileri alıp profesyonel başlık ve açıklama oluştur.
+    
+    Args:
+        draft: Mevcut taslak (minimum bilgiler)
+        vision_product: Vision analizi sonuçları
+    
+    Returns:
+        {"title": "...", "description": "..."}
+    """
+    vision_ctx = vision_product or draft.vision_product or {}
+    
+    # Mevcut bilgileri topla
+    product_info = {
+        "title": draft.title or "Ürün",
+        "category": draft.category or "Genel",
+        "condition": draft.condition or "used",
+        "price": draft.price,
+        "metadata": draft.metadata or {},
+        "vision": vision_ctx
+    }
+    
+    system_prompt = (
+        "Sen PazarGlobal için profesyonel ilan başlıkları ve açıklamaları yazan bir copywriter'sın.\n"
+        "Görevin: Kullanıcıdan aldığın minimum bilgileri alıp, çekici ve detaylı bir ilan metni oluşturmak.\n\n"
+        "KURALLAR:\n"
+        "1. Başlık: 60-80 karakter, SEO-friendly, önemli özellikler içermeli\n"
+        "2. Açıklama: Emoji kullan, madde işaretli liste yap, profesyonel ama samimi ton\n"
+        "3. Abartma! Gerçekçi kal, yalan söyleme\n"
+        "4. Kategori-specific detaylar ekle (Otomotiv için km/yıl, Elektronik için özellkler)\n"
+        "5. Türkçe dilbilgisi ve imla kurallarına uy\n\n"
+        "JSON formatında döndür: {\"title\": \"...\", \"description\": \"...\"}\n"
+        "Açıklamada \\n karakteri kullan (gerçek satır sonu için)."
+    )
+    
+    user_prompt = (
+        f"Ürün bilgileri: {json.dumps(product_info, ensure_ascii=False, indent=2)}\n\n"
+        "Bu bilgilerden profesyonel bir ilan başlığı ve açıklaması oluştur.\n"
+        "Başlık kısa ve çarpıcı, açıklama detaylı ve ikna edici olsun."
+    )
+    
+    try:
+        resp = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.7,  # Yaratıcılık için biraz yüksek
+            response_format={"type": "json_object"}
+        )
+        
+        content = resp.choices[0].message.content or "{}"
+        parsed = json.loads(content)
+        
+        return {
+            "title": parsed.get("title", draft.title or "Ürün"),
+            "description": parsed.get("description", draft.description or "")
+        }
+    except Exception as e:
+        print(f"❌ LLM enhancement error: {e}")
+        # Fallback: Basit template
+        return {
+            "title": draft.title or "Ürün",
+            "description": draft.description or "İletişim için mesaj atın."
+        }
+
+
+async def generate_structured_draft_update(
+    user_text: str,
+    vision_product: Optional[Dict[str, Any]],
+    existing_draft: Optional[DraftState]
+) -> Dict[str, Any]:
+    """OPTIMIZED: Tek LLM çağrısında hem extraction hem enhancement yapıyoruz."""
+    vision_context = vision_product or {}
+    draft_context = existing_draft.publish_payload() if existing_draft else {}
+    
+    # Görsel varsa detaylı açıklama, yoksa kısa tut
+    has_vision = bool(vision_context.get("product_name") or vision_context.get("detected_text"))
+
+    system_prompt = (
+        "Sen PazarGlobal için profesyonel ilan oluşturan bir AI asistansın. "
+        "Kullanıcının mesajından ve görsel analizinden (varsa) ilan bilgilerini çıkar ve AYNI ANDA profesyonel hale getir.\n\n"
+        "KURALLAR:\n"
+        "1. Başlık: 40-80 karakter, önemli özellikler içermeli (marka, model, özellikler)\n"
+        "2. Açıklama: " + ("Detaylı ve ikna edici (emoji kullan, madde işaretli)" if has_vision else "Kısa ve öz (1-2 cümle)") + "\n"
+        "3. Category, condition, location çıkar (varsa)\n"
+        "4. Fiyat belirtilmişse çıkar\n"
+        "5. JSON formatında döndür\n\n"
+        "JSON format: {\"title\": \"...\", \"description\": \"...\", \"price\": null|number, \"category\": \"...\", \"condition\": \"new\"|\"used\", \"location\": \"...\"}"
+    )
+
+    user_prompt = (
+        f"Kullanıcı mesajı: {user_text or 'Yok'}\n"
+        f"Mevcut taslak: {json.dumps(draft_context, ensure_ascii=False)}\n"
+        f"Görsel analizi: {json.dumps(vision_context, ensure_ascii=False) if has_vision else 'Yok'}\n\n"
+        "Profesyonel ilan bilgileri oluştur (JSON):"
+    )
+
+    try:
+        resp = await client.chat.completions.create(  # type: ignore[attr-defined]
+            model="gpt-4o-mini",
+            temperature=0.1,  # 0.2'den 0.1'e düşürdük (daha hızlı)
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        content = resp.choices[0].message.content if resp.choices else "{}"
+        parsed = json.loads(content or "{}")
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+async def handle_listing_fsm(
+    intent: str,
+    user_text: str,
+    safe_media_paths: List[str],
+    vision_product: Optional[Dict[str, Any]],
+    active_draft: Optional[DraftState],
+) -> Optional[Dict[str, Any]]:
+    """Batch FSM: Maximum extraction + LLM enhancement + single preview."""
+
+    resolved_user_id = resolve_user_id()
+    if not resolved_user_id:
+        return {
+            "response": "Bu işlem için giriş yapmanız gerekiyor (aktif taslak yönetimi).",
+            "intent": intent,
+            "success": False,
+        }
+
+    draft = active_draft or DraftState(
+        id=str(uuid.uuid4()),
+        user_id=resolved_user_id,
+        state=ListingState.DRAFT,
+        vision_product=vision_product or {},
+    )
+    
+    # DÜZELTME: Görselleri merge et
+    if safe_media_paths:
+        draft.merge_images(safe_media_paths)
+
+    if intent in {"create_listing", "update_listing_draft"}:
+        # OPTIMIZED: Tek LLM çağrısında hem extraction hem enhancement
+        update = await generate_structured_draft_update(user_text, vision_product, draft)
+        if update.get("price") is not None:
+            update["price"] = _normalize_price_value(update.get("price"))
+        draft.apply_update(update)
+
+        # Optional: user explicitly asked for description improvement
+        if _wants_description_suggestion(user_text):
+            draft.description = _build_description_suggestion(draft)
+
+        # Ensure defaults for persisted draft
+        draft.stock = draft.stock if draft.stock is not None else 1
+        draft.metadata = _build_metadata(draft, vision_product)
+        
+        # DÜZELTME: Eksik zorunlu alanları kontrol et ve sor
+        missing_fields = []
+        if not draft.price or draft.price <= 0:
+            missing_fields.append("fiyat")
+        if not draft.location:
+            missing_fields.append("konum")
+        
+        # Eksik alan varsa sor
+        if missing_fields:
+            draft.state = ListingState.DRAFT
+            await db_upsert_active_draft(draft)
+            questions = []
+            if "fiyat" in missing_fields:
+                questions.append("💰 **Fiyat**: Ürününüzün satış fiyatı nedir? (örn: 5000 TL)")
+            if "konum" in missing_fields:
+                questions.append("📍 **Konum**: Ürününüz nerede? (örn: İstanbul, Ankara)")
+            
+            response = "İlanınızı tamamlamak için aşağıdaki bilgileri paylaşır mısınız?\n\n"
+            response += "\n".join(questions)
+            response += "\n\n💡 Bilgileri tek mesajda veya ayrı ayrı gönderebilirsiniz."
+            
+            return {
+                "response": response,
+                "intent": "create_listing",
+                "success": True,
+            }
+        
+        draft.state = ListingState.PREVIEW if intent == "create_listing" else ListingState.EDIT
+        await db_upsert_active_draft(draft)
+        
+        # 4. Rich preview (single confirmation)
+        preview = draft.as_preview_text()
+        if _wants_description_suggestion(user_text):
+            preview += "\n\n💡 Açıklamayı özelleştirmek için: 'açıklamayı değiştir' yazın."
+        return {
+            "response": preview,
+            "intent": "create_listing",
+            "success": True,
+        }
+
+    if intent == "publish_listing":
+        if not draft.title:
+            return {
+                "response": "Taslakta başlık yok. Lütfen başlık ve temel bilgileri yazın.",
+                "intent": intent,
+                "success": False,
+            }
+        payload = draft.publish_payload()
+        payload_condition = _normalize_condition_value(payload.get("condition")) or "used"
+        payload_location = payload.get("location") or "Türkiye"
+        payload_stock = payload.get("stock") if payload.get("stock") is not None else 1
+        payload_metadata = _build_metadata(draft, vision_product)
+        result = await insert_listing(
+            title=payload.get("title"),
+            user_id=resolved_user_id,
+            price=payload.get("price"),
+            condition=payload_condition,
+            category=payload.get("category"),
+            description=payload.get("description"),
+            location=payload_location,
+            stock=payload_stock,
+            metadata=payload_metadata,
+            images=payload.get("images"),
+            listing_id=payload.get("listing_id"),
+            user_name=resolve_user_name(),
+            user_phone=resolve_user_phone(),
+        )
+        if not result.get("success"):
+            error_detail = result.get("error") or result.get("message") or result.get("result")
+            if not error_detail and result.get("status"):
+                error_detail = f"status={result.get('status')}"
+            if error_detail is not None and not isinstance(error_detail, str):
+                try:
+                    error_detail = json.dumps(error_detail, ensure_ascii=False)
+                except Exception:
+                    error_detail = str(error_detail)
+            return {
+                "response": f"İlan yayınlanamadı: {error_detail}",
+                "intent": intent,
+                "success": False,
+            }
+        await db_clear_active_draft(resolved_user_id)
+        return {
+            "response": f"✅ İlan yayınlandı! ID: {result.get('listing_id', draft.id)}",
+            "intent": intent,
+            "success": True,
+        }
+
+    return None
+
+
 # Main workflow runner
 async def run_workflow(workflow_input: WorkflowInput):
     """
@@ -2024,6 +2831,11 @@ async def run_workflow(workflow_input: WorkflowInput):
         )
         WORKFLOW_CONTEXT.set(ctx)
         workflow = workflow_input.model_dump()
+
+        # Deterministic media + vision context buffers
+        safe_media_paths: List[str] = []
+        blocked_media_paths: List[Dict[str, Any]] = []
+        first_safe_vision: Optional[Dict[str, Any]] = None
         
         # DEBUG: Log media paths to diagnose webchat image upload issue
         if workflow.get("media_paths"):
@@ -2106,14 +2918,53 @@ async def run_workflow(workflow_input: WorkflowInput):
 
         # If user references "X nolu ilan", resolve it against last search results and persist active listing
         raw_user_text_full = (workflow.get("input_as_text") or "")
+
+        # Deterministic delete confirmation handling (prevents "evet" being misrouted)
+        if isinstance(ctx.conversation_state, dict) and ctx.conversation_state.get("mode") == "delete_confirm":
+            pending_id = ctx.conversation_state.get("pending_delete_listing_id") or ctx.conversation_state.get("active_listing_id")
+            if pending_id and _is_uuid(str(pending_id)):
+                if _is_affirmative(raw_user_text_full):
+                    del_result = await delete_listing_tool(str(pending_id))
+                    # Clear pending state regardless of outcome to avoid looping
+                    ctx.conversation_state.pop("pending_delete_listing_id", None)
+                    ctx.conversation_state["mode"] = ""
+                    if del_result.get("success"):
+                        return {
+                            "response": "✅ İlan silindi.",
+                            "intent": "delete_listing",
+                            "success": True,
+                        }
+                    err = del_result.get("message") or del_result.get("error") or "Silme işlemi başarısız."
+                    return {
+                        "response": f"❌ İlan silinemedi: {err}",
+                        "intent": "delete_listing",
+                        "success": False,
+                    }
+                if _is_negative(raw_user_text_full):
+                    ctx.conversation_state.pop("pending_delete_listing_id", None)
+                    ctx.conversation_state["mode"] = ""
+                    return {
+                        "response": "Tamam, silme işlemi iptal edildi.",
+                        "intent": "delete_listing",
+                        "success": True,
+                    }
+                title = _title_from_last_results(user_id_key, str(pending_id))
+                title_part = f"'{title}' " if title else ""
+                return {
+                    "response": f"{title_part}ilanını silmek istiyor musun? (evet/hayır)",
+                    "intent": "delete_listing",
+                    "success": True,
+                }
+
         requested_num = _extract_listing_number(raw_user_text_full)
         if requested_num is not None:
-            last = USER_LAST_SEARCH_RESULTS_STORE.get(user_id_key) or []
+            last = _get_last_results_for_user(resolve_user_id(user_id_key), resolve_user_phone())
             idx = requested_num - 1
             if 0 <= idx < len(last):
                 mapped_id = last[idx].get("id")
                 if mapped_id and _is_uuid(str(mapped_id)):
-                    USER_ACTIVE_LISTING_STORE[user_id_key] = str(mapped_id)
+                    keys = [user_id_key, resolve_user_phone(), "anonymous"]
+                    _set_active_listing_for_keys(str(mapped_id), [k for k in keys if k])
                     if isinstance(ctx.conversation_state, dict):
                         ctx.conversation_state["active_listing_id"] = str(mapped_id)
                     conversation_history.append(cast(TResponseInputItem, {
@@ -2122,6 +2973,60 @@ async def run_workflow(workflow_input: WorkflowInput):
                             {"type": "output_text", "text": f"[CONVERSATION_STATE] ACTIVE_LISTING_ID={mapped_id}"}
                         ]
                     }))
+
+        # Deterministic detail rendering for "X nolu ilan" to avoid LLM misalignment
+        raw_user_text_l = raw_user_text_full.strip().lower()
+        wants_detail = requested_num is not None and any(k in raw_user_text_l for k in ("göster", "goster", "detay"))
+        if wants_detail:
+            last = _get_last_results_for_user(resolve_user_id(user_id_key), resolve_user_phone())
+            if not last:
+                return {
+                    "response": "Henüz listelenmiş bir arama sonucu yok. Önce arama yapalım (örn: 'araba var mı?').",
+                    "intent": "search_product",
+                    "success": False,
+                }
+
+            idx = (requested_num or 1) - 1
+            if idx < 0 or idx >= len(last):
+                return {
+                    "response": f"Bu aramada sadece {len(last)} ilan var. 1-{len(last)} arasından seçim yapabilirsiniz.",
+                    "intent": "search_product",
+                    "success": False,
+                }
+
+            item = last[idx] or {}
+            title = item.get("title") or "İlan"
+            price = item.get("price")
+            location = item.get("location") or "Türkiye"
+            condition = _condition_display(_normalize_condition_value(item.get("condition"))) or "Belirtilmedi"
+            category = item.get("category") or "Genel"
+            owner_name = item.get("user_name") or item.get("owner_name")
+            owner_phone = item.get("user_phone") or item.get("owner_phone") or resolve_user_phone()
+            description = item.get("description") or "Açıklama yok."
+            if len(description) > 400:
+                description = description[:400] + "..."
+            images = item.get("signed_images") or []
+            photos = [str(u) for u in images if u]
+            photos_text = "Fotoğraf yok." if not photos else "Fotoğraflar:\n" + "\n".join(photos[:3])
+            owner_line = ""
+            if owner_name or owner_phone:
+                owner_line = f"İlan sahibi: {owner_name or 'Bilinmiyor'}" + (f" | Telefon: {owner_phone}" if owner_phone else "")
+
+            detail_text = (
+                f"{title}\n\n"
+                f"Fiyat: {price if price is not None else 'Belirtilmedi'} TL\n"
+                f"Konum: {location}\n"
+                f"Durum: {condition}\n"
+                f"Kategori: {category}\n"
+                f"{owner_line}\n\n"
+                f"Açıklama: {description}\n\n"
+                f"{photos_text}"
+            )
+            return {
+                "response": detail_text,
+                "intent": "search_product",
+                "success": True,
+            }
 
         # Inject last search results summary when it can help follow-up actions
         raw_user_text_l = raw_user_text_full.strip().lower()
@@ -2260,41 +3165,57 @@ async def run_workflow(workflow_input: WorkflowInput):
             logger.warning(f"⚠️ User {user_id_key} tried to upload {len(media_paths)} photos, limiting to 10")
             media_paths = media_paths[:10]
 
-        safe_media_paths: List[str] = []
-        blocked_media_paths: List[Dict[str, Any]] = []
-        first_safe_vision: Optional[Dict[str, Any]] = None
-
         # VisionSafetyProductAgent only runs when explicit media is present
         if media_paths:
-            for media_path in media_paths:
-                image_url = _resolve_public_image_url(str(media_path))
-                vision_input: List[TResponseInputItem] = cast(List[TResponseInputItem], [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "input_text", "text": "Analyze the attached image for safety and product. Return JSON only."},
-                            {"type": "input_image", "image_url": image_url}
-                        ]
-                    }
-                ])
+            sem = asyncio.Semaphore(VISION_MAX_CONCURRENCY)
 
-                try:
-                    vision_result_temp = await Runner.run(
-                        vision_safety_product_agent,
-                        input=vision_input,  # type: ignore[arg-type]
-                        run_config=RunConfig(trace_metadata={
-                            "__trace_source__": "agent-builder",
-                            "workflow_id": "vision_safety_product"
-                        })
-                    )
-                    vision_result = vision_result_temp.final_output.model_dump()
-                except Exception as exc:  # pragma: no cover
+            async def _analyze_one(media_path: str) -> Dict[str, Any]:
+                async with sem:
+                    image_url = _resolve_public_image_url(str(media_path))
+                    vision_input: List[TResponseInputItem] = cast(List[TResponseInputItem], [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "input_text", "text": "Analyze the attached image for safety and product. Return JSON only."},
+                                {"type": "input_image", "image_url": image_url}
+                            ]
+                        }
+                    ])
+                    try:
+                        vision_result_temp = await Runner.run(
+                            vision_safety_product_agent,
+                            input=vision_input,  # type: ignore[arg-type]
+                            run_config=RunConfig(trace_metadata={
+                                "__trace_source__": "agent-builder",
+                                "workflow_id": "vision_safety_product"
+                            })
+                        )
+                        return {
+                            "path": str(media_path),
+                            "success": True,
+                            "vision": vision_result_temp.final_output.model_dump(),
+                        }
+                    except Exception as exc:  # pragma: no cover
+                        return {
+                            "path": str(media_path),
+                            "success": False,
+                            "reason": f"vision_error: {exc}",
+                        }
+
+            # Parallelize per-image vision calls (major speedup for 2-10 photos)
+            vision_results = await asyncio.gather(*[_analyze_one(p) for p in media_paths])
+
+            # Process results in the original order for deterministic "first_safe_vision"
+            for item in vision_results:
+                media_path = str(item.get("path") or "")
+                if not item.get("success"):
                     blocked_media_paths.append({
-                        "path": str(media_path),
-                        "reason": f"vision_error: {exc}",
+                        "path": media_path,
+                        "reason": item.get("reason") or "vision_error",
                     })
                     continue
 
+                vision_result = cast(Dict[str, Any], item.get("vision") or {})
                 safe_flag = bool(vision_result.get("safe"))
                 flag_type = (vision_result.get("flag_type") or "unknown")
                 allow_listing_flag = vision_result.get("allow_listing")
@@ -2392,28 +3313,84 @@ async def run_workflow(workflow_input: WorkflowInput):
                     }
                 ]
             }))
+
+            # IMPORTANT: propagate pending safe media into deterministic FSM inputs
+            # so drafts can reliably merge images even when photos and text are sent separately.
+            if not safe_media_paths:
+                safe_media_paths = [str(p).strip() for p in pending_safe_media if str(p).strip()]
         
-        # Step 1: Classify intent (ensure USER_CONTEXT note is part of history for personalization and ownership)
+        # Step 1: Classify intent (OPTIMIZED: Hızlı regex öncelikli, karmaşık durumlarda LLM)
+        if HYBRID_FLOW_ENABLED and safe_media_paths and not raw_user_text_full.strip() and not force_wallet_intent:
+            # Hybrid: photo-only is ambiguous (could be listing, search, price analysis). Don't guess intent.
+            last_intent = None
+            if isinstance(ctx.conversation_state, dict):
+                last_intent = ctx.conversation_state.get("last_intent")
+            logger.info("⚡ Hybrid photo-only: returning choice prompt (no intent guess)")
+            return {
+                "response": _hybrid_photo_only_prompt(
+                    last_intent=cast(Optional[str], last_intent),
+                    vision_product=(first_safe_vision or {}).get("product") if first_safe_vision else None,
+                    has_photos=bool(safe_media_paths),
+                ),
+                "intent": "create_listing",
+                "success": True,
+                "safe_media_paths": safe_media_paths,
+                "blocked_media_paths": blocked_media_paths,
+            }
         if force_wallet_intent:
             intent = "wallet_query"
         else:
-            router_agent_intent_classifier_result_temp = await Runner.run(
-                router_agent_intent_classifier,
-                input=[*conversation_history],
-                run_config=RunConfig(trace_metadata={
-                    "__trace_source__": "agent-builder",
-                    "workflow_id": "wf_691884cc7e6081908974fe06852942af0249d08cf5054fdb"
-                })
-            )
+            # HIZLI INTENT DETECTION (Regex-based, ~0ms) - ÖNCELİK SIRASI ÖNEMLİ!
+            user_text_lower = raw_user_text_full.lower().strip()
+            quick_intent = None
             
-            conversation_history.extend([item.to_input_item() for item in router_agent_intent_classifier_result_temp.new_items])
+            # 1. ÖNCE SPESIFIK INTENT'LERI KONTROL ET (yüksek öncelik)
             
-            router_agent_intent_classifier_result = {
-                "output_text": router_agent_intent_classifier_result_temp.final_output.json(),
-                "output_parsed": router_agent_intent_classifier_result_temp.final_output.model_dump()
-            }
+            # İlan verme kalıpları (en yüksek öncelik)
+            if any(phrase in user_text_lower for phrase in ["ilan ver", "satmak istiyorum", "ürün sat", "ilan oluştur", "yayınla"]):
+                quick_intent = "create_listing"
             
-            intent = router_agent_intent_classifier_result["output_parsed"]["intent"]
+            # Arama kalıpları (soru kalıpları dahil: "var mı", "satılık", "arıyorum")
+            elif any(phrase in user_text_lower for phrase in ["var mı", "varmı", "satılık", "arıyorum", "araba", "telefon", "bilgisayar", "ev", "daire", "ikinci el", "sıfır"]):
+                quick_intent = "search_product"
+            
+            # Cüzdan kalıpları
+            elif any(phrase in user_text_lower for phrase in ["bakiye", "kredi", "cüzdan", "wallet", "balance", "param"]):
+                quick_intent = "wallet_query"
+            
+            # 2. SELAMLAMA VE BASIT SOHBET (LLM'siz, cached)
+            # "selam", "merhaba", "nasılsın", "naber", "konuşalım mı" → small_talk
+            # Ama "selam araba var mı" → search olmalı (yukarıda yakalandı)
+            simple_chat_keywords = ["selam", "merhaba", "günaydın", "iyi günler", "hello", "hi", "hey", 
+                                   "nasılsın", "naber", "nasıl gidiyor", "ne yapıyorsun", 
+                                   "konuşalım", "sohbet", "muhabbet"]
+            if any(word in user_text_lower for word in simple_chat_keywords) and len(user_text_lower.split()) <= 5:
+                quick_intent = "small_talk"
+            
+            # Hızlı intent bulunduysa LLM'e gitme
+            if quick_intent:
+                intent = quick_intent
+                logger.info(f"⚡ Hızlı intent detection: {intent} (~0ms)")
+            else:
+                # Karmaşık durum: LLM'e sor
+                logger.info(f"🤔 Karmaşık mesaj, LLM intent classifier'a gidiyoruz...")
+                router_agent_intent_classifier_result_temp = await Runner.run(
+                    router_agent_intent_classifier,
+                    input=[*conversation_history],
+                    run_config=RunConfig(trace_metadata={
+                        "__trace_source__": "agent-builder",
+                        "workflow_id": "wf_691884cc7e6081908974fe06852942af0249d08cf5054fdb"
+                    })
+                )
+                
+                conversation_history.extend([item.to_input_item() for item in router_agent_intent_classifier_result_temp.new_items])
+                
+                router_agent_intent_classifier_result = {
+                    "output_text": router_agent_intent_classifier_result_temp.final_output.json(),
+                    "output_parsed": router_agent_intent_classifier_result_temp.final_output.model_dump()
+                }
+                
+                intent = router_agent_intent_classifier_result["output_parsed"]["intent"]
 
         # Persist last intent in conversation_state and expose to downstream agents
         state_for_update = resolve_conversation_state()
@@ -2437,10 +3414,93 @@ async def run_workflow(workflow_input: WorkflowInput):
                     ]
                 }))
 
+            # Deterministic FSM override: if active draft exists, keep user in draft loop unless explicitly publishing
+            resolved_user_for_draft = resolve_user_id(user_id_key)
+            active_draft = await db_get_active_draft(resolved_user_for_draft)
+
+            # HYBRID: Form-first kickoff for new listing (no active draft yet)
+            if HYBRID_FLOW_ENABLED and intent == "create_listing" and not active_draft:
+                if _should_offer_form_first(raw_user_text_full):
+                    resolved_uid = resolve_user_id()
+                    if not resolved_uid:
+                        return {
+                            "response": "Bu işlem için giriş yapmanız gerekiyor (aktif taslak yönetimi).",
+                            "intent": intent,
+                            "success": False,
+                            "safe_media_paths": safe_media_paths,
+                            "blocked_media_paths": blocked_media_paths,
+                        }
+                    draft = DraftState(
+                        id=str(uuid.uuid4()),
+                        user_id=resolved_uid,
+                        state=ListingState.DRAFT,
+                        vision_product=(first_safe_vision or {}).get("product") if first_safe_vision else {},
+                    )
+                    if safe_media_paths:
+                        draft.merge_images(safe_media_paths)
+                    await db_upsert_active_draft(draft)
+                    return {
+                        "response": _hybrid_form_first_prompt(
+                            vision_product=(first_safe_vision or {}).get("product") if first_safe_vision else None,
+                            has_photos=bool(safe_media_paths),
+                        ),
+                        "intent": "create_listing",
+                        "success": True,
+                        "safe_media_paths": safe_media_paths,
+                        "blocked_media_paths": blocked_media_paths,
+                    }
+            if active_draft and intent not in {"publish_listing", "cancel"}:
+                # Stay in deterministic draft loop for any non-publish, non-cancel intent
+                intent = "update_listing_draft"
+
+            # Deterministic delete confirmation kickoff (prevents routing issues on "evet")
+            if intent == "delete_listing":
+                resolved_uid = resolve_user_id()
+                if not resolved_uid:
+                    return {
+                        "response": "Bu işlem için giriş yapmanız gerekiyor.",
+                        "intent": "auth_required",
+                        "success": False,
+                    }
+                pending_id = None
+                if isinstance(state_for_update, dict):
+                    pending_id = state_for_update.get("active_listing_id")
+                if not pending_id or not _is_uuid(str(pending_id)):
+                    # Fallback: let the agent list user's listings and map by number
+                    pending_id = None
+                else:
+                    if isinstance(state_for_update, dict):
+                        state_for_update["mode"] = "delete_confirm"
+                        state_for_update["pending_delete_listing_id"] = str(pending_id)
+                    title = _title_from_last_results(user_id_key, str(pending_id))
+                    title_part = f"'{title}' " if title else ""
+                    return {
+                        "response": f"Merhaba {resolve_user_name() or ''}. {title_part}ilanını silinsin mi? (evet/hayır)",
+                        "intent": "delete_listing",
+                        "success": True,
+                    }
+
+            # Deterministic state machine handles draft → preview → publish without tool-calling agents
+            if intent in {"create_listing", "update_listing_draft", "publish_listing"}:
+                fsm_result = await handle_listing_fsm(
+                    intent=intent,
+                    user_text=raw_user_text_full,
+                    safe_media_paths=safe_media_paths,
+                    vision_product=(first_safe_vision or {}).get("product") if first_safe_vision else None,
+                    active_draft=active_draft,
+                )
+                if fsm_result is not None:
+                    fsm_result["safe_media_paths"] = safe_media_paths
+                    fsm_result["blocked_media_paths"] = blocked_media_paths
+                    return fsm_result
+
         # Authentication gate for protected intents
         auth_ctx = resolve_auth_context()
         resolved_user_id = resolve_user_id()
-        is_authenticated = bool(auth_ctx.get("authenticated") and resolved_user_id)
+        # WhatsApp oturumlarında PIN doğrulaması Edge Function tarafında yapılıyor.
+        # Phone → profile → user_id çözülüyorsa bu isteği authenticated saymak yeterli.
+        # (Bazı durumlarda auth_context gelmiyor; bu kullanıcıyı tekrar PIN'e zorlamasın.)
+        is_authenticated = bool(resolved_user_id)
         protected_intents = {"update_listing", "delete_listing"}
         if intent in protected_intents and not is_authenticated:
             return {
@@ -2449,7 +3509,7 @@ async def run_workflow(workflow_input: WorkflowInput):
                 "success": False
             }
         
-        # Step 2: Route to appropriate agent
+        # Step 2: Route to appropriate agent (OPTIMIZED: Cached responses için small_talk)
         # TEMPORARILY DISABLED pin_request - causing 500 errors
         if intent == "pin_request":
             # Fallback to small_talk when PIN is requested but disabled
@@ -2461,6 +3521,52 @@ async def run_workflow(workflow_input: WorkflowInput):
                     "workflow_id": "wf_691884cc7e6081908974fe06852942af0249d08cf5054fdb"
                 })
             )
+        elif intent == "small_talk":
+            # OPTIMIZED: Basit selamlaşma için cached response (LLM'siz, ~50ms)
+            user_name = resolve_user_name() or "değerli kullanıcımız"
+            user_text_lower = user_text.lower()
+            
+            # "nasılsın", "naber" gibi sorulara özel cevaplar
+            if any(word in user_text_lower for word in ["nasılsın", "naber", "nasıl gidiyor", "ne yapıyorsun"]):
+                cached_response = (
+                    f"İyiyim {user_name}, teşekkür ederim! 😊 Sen nasılsın?\n\n"
+                    "📦 İlan vermek için: Ürününün fotoğrafını gönder veya özelliklerini yaz\n"
+                    "🔍 Ürün aramak için: Ne aradığını söyle (örn: 'iPhone arıyorum')\n"
+                    "💰 Bakiyeni görmek için: 'bakiyem' yaz"
+                )
+            elif any(word in user_text_lower for word in ["konuşalım", "sohbet", "muhabbet"]):
+                cached_response = (
+                    f"Tabii {user_name}, buradayım! 😊 Sana nasıl yardımcı olabilirim?\n\n"
+                    "📦 Ürün satmak istiyorsan: Fotoğraf gönder veya detayları yaz\n"
+                    "🔍 Ürün arıyorsan: Ne tür bir ürün aradığını söyle\n"
+                    "❓ Sormak istediğin bir şey varsa çekinme!"
+                )
+            else:
+                # Normal selamlaşma
+                greeting_responses = [
+                    f"Selam {user_name}! 👋 PazarGlobal'e hoş geldin! 🛒\n\n"
+                    "✨ Ürün satmak istiyorsan: Satmak istediğin ürünün adını ve temel özelliklerini yaz.\n"
+                    "🔍 Ürün aramak istiyorsan: Ne tür bir ürün aradığını söyle (örneğin: 'ikinci el telefon', 'bebek arabası').\n\n"
+                    "Bugün PazarGlobal'de ne yapmak istersin?",
+                    
+                    f"Merhaba {user_name}! 🎉 Nasıl yardımcı olabilirim?\n\n"
+                    "📦 İlan vermek için: 'ilan vermek istiyorum' yaz\n"
+                    "🔍 Ürün aramak için: 'telefon arıyorum' gibi arama yap\n"
+                    "💰 Bakiyeni görmek için: 'bakiyem' yaz",
+                ]
+                
+                # Rastgele bir greeting seç
+                import random
+                cached_response = random.choice(greeting_responses)
+            
+            logger.info(f"⚡ Cached small_talk response kullanıldı (~50ms)")
+            
+            return {
+                "response": cached_response,
+                "intent": "small_talk",
+                "safe_media_paths": safe_media_paths,
+                "blocked_media_paths": blocked_media_paths,
+            }
         elif intent == "create_listing":
             result = await Runner.run(
                 listingagent,
@@ -2482,6 +3588,16 @@ async def run_workflow(workflow_input: WorkflowInput):
         elif intent == "publish_listing":
             result = await Runner.run(
                 publishagent,
+                input=[*conversation_history],
+                run_config=RunConfig(trace_metadata={
+                    "__trace_source__": "agent-builder",
+                    "workflow_id": "wf_691884cc7e6081908974fe06852942af0249d08cf5054fdb"
+                })
+            )
+        elif intent == "cancel":
+            await _clear_active_draft_for_current_user()
+            result = await Runner.run(
+                cancelagent,
                 input=[*conversation_history],
                 run_config=RunConfig(trace_metadata={
                     "__trace_source__": "agent-builder",
