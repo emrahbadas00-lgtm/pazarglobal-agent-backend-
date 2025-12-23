@@ -1,3 +1,61 @@
+""",
+    tools=[search_listings_tool, market_price_tool],
+
+FUTURE FEATURE - PREMIUM LISTING STRATEGY (Phase 3.5):
+============================================================
+Premium listing feature will leverage current pagination system (5 listings at a time)
+for strategic monetization. This creates natural incentive for users to upgrade.
+
+IMPLEMENTATION PLAN:
+-------------------
+1. Database Changes:
+   - ALTER TABLE listings ADD COLUMN is_premium BOOLEAN DEFAULT FALSE;
+   - ALTER TABLE listings ADD COLUMN premium_expires_at TIMESTAMP;
+   - CREATE INDEX idx_listings_premium ON listings(is_premium, created_at);
+
+2. search_listings_tool Enhancement:
+   - Add parameter: prioritize_premium: bool = True
+   - ORDER BY: is_premium DESC, created_at DESC
+   - First 5 results will always prioritize premium listings
+
+3. SearchAgent Display Format:
+   - Premium listings: ⭐ PREMIUM #1: [Title] - ÖNE ÇIKAN İLAN
+   - Normal listings: #3: [Title]
+   - Show premium count: "100 ilan bulundu (12 premium)"
+
+4. UX Flow Examples:
+   
+   Scenario A - Many Premium Listings:
+   User: "Araba arıyorum"
+   Agent: "100 ilan bulundu (12 premium). 5 göstereyim mi?"
+   User: "Göster"
+   Agent: Shows 5 premium listings first
+          "💡 Premium ilanlar öncelikli gösteriliyor!"
+   
+   Scenario B - Few Premium (Conversion Trigger):
+   User: "Otomotiv ilanları"
+   Agent: "50 ilan bulundu (2 premium). 5 göstereyim mi?"
+   User: "Göster"
+   Agent: Shows 2 premium + 3 normal
+          "💡 ⭐ Premium ilanlar listenin başında görünür!
+              İlanınızı öne çıkarmak için Premium üyelik edinin."
+
+5. Why Current System is Perfect Foundation:
+   - Small batches (5 at a time) → Clear premium visibility
+   - "Ask first" approach → Can show premium stats before display
+   - Limit parameter control → Easy to mix premium/normal intelligently
+   - Conversation context → Track pagination while maintaining premium priority
+
+6. Monetization Psychology:
+   - Normal user sees premium listings dominating first page
+   - "Why is my listing never in top 5?" → upgrade motivation
+   - Premium user gets immediate ROI visibility
+   - Transparent: "12 premium ilanlar var" shows competition level
+
+TODO: Implement after Phase 3 (Listing Management) is complete.
+============================================================
+""",
+    tools=[search_listings_tool, market_price_tool],
 import os
 import re
 import uuid
