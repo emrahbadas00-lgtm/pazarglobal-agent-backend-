@@ -190,17 +190,14 @@ async def insert_listing(
                     listing_id_created = match.group(0)
 
             if listing_id_created:
-                # Calculate actual cost based on usage (minimum 55 credits)
-                total_cost = 50  # legacy base cost before policy floor
+                # Calculate actual cost based on usage
+                total_cost = 50  # Base listing cost (₺10)
                 
                 # Vision safety check (1 call regardless of photo count)
                 if images and len(images) > 0:
                     total_cost += 5  # Vision safety check (₺1)
-
-                if total_cost < 55:
-                    total_cost = 55  # Minimum deduction policy (₺11)
                 
-                print(f"💰 Deducting {total_cost} credits for listing (minimum 55kr policy, {'with photos' if images else 'no photos'})...")
+                print(f"💰 Deducting {total_cost} credits for listing (base 50kr + {' vision 5kr' if images else 'no photos'})...")
                 deduct_result = deduct_credits(
                     user_id=user_id,
                     amount_credits=total_cost,
