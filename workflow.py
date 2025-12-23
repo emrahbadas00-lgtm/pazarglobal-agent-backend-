@@ -98,24 +98,6 @@ def _should_offer_form_first(user_text: str) -> bool:
     return False
 
 
-def _hybrid_photo_only_prompt(*, last_intent: Optional[str], vision_product: Optional[Dict[str, Any]], has_photos: bool) -> str:
-    # No caption text + photos: don't guess intent; offer the fastest path without blocking future flows.
-    base = _hybrid_form_first_prompt(vision_product=vision_product, has_photos=has_photos)
-    last = (last_intent or "").strip()
-    hint = ""
-    if last in {"search_product"}:
-        hint = "\n\nNot: Son mesajlarınız arama niyetindeydi. Ürün aramak istiyorsanız ne aradığınızı yazın (örn: 'iphone 14 pro max')."
-    return (
-        "Fotoğraf geldi ama açıklama yok. En hızlı yol aşağıdaki bilgileri tek mesajda yazmanız:\n\n"
-        + base
-        + hint
-        + "\n\nAlternatifler:\n"
-        "- Fiyat analizi için: 'fiyat' yazın (yakında)\n"
-        "- Ürün aramak için: Ne aradığınızı yazın (örn: 'koltuk takımı')\n"
-        "- İlan oluşturmak için: Yukarıdaki formu doldurun"
-    )
-
-
 def _resolve_public_image_url(path: str) -> str:
     """Convert stored path to public URL for vision model access."""
     if not path:
@@ -3238,23 +3220,10 @@ async def run_workflow(workflow_input: WorkflowInput):
         
         # Step 1: Classify intent (OPTIMIZED: Hızlı regex öncelikli, karmaşık durumlarda LLM)
         if HYBRID_FLOW_ENABLED and safe_media_paths and not raw_user_text_full.strip() and not force_wallet_intent:
-            # Hybrid: photo-only is ambiguous (could be listing, search, price analysis). Don't guess intent.
-            last_intent = None
-            if isinstance(ctx.conversation_state, dict):
-                last_intent = ctx.conversation_state.get("last_intent")
-            logger.info("⚡ Hybrid photo-only: returning choice prompt (no intent guess)")
-            return {
-                "response": _hybrid_photo_only_prompt(
-                    last_intent=cast(Optional[str], last_intent),
-                    vision_product=(first_safe_vision or {}).get("product") if first_safe_vision else None,
-                    has_photos=bool(safe_media_paths),
-                ),
-                "intent": "create_listing",
-                "success": True,
-                "safe_media_paths": safe_media_paths,
-                "blocked_media_paths": blocked_media_paths,
-            }
-        if force_wallet_intent:
+            # Hybrid fast-path: photo-first message with no text → guide user with one-shot form
+            intent = "create_listing"
+            logger.info("⚡ Hybrid form-first (photo-only): intent=create_listing")
+        elif force_wallet_intent:
             intent = "wallet_query"
         else:
             # HIZLI INTENT DETECTION (Regex-based, ~0ms) - ÖNCELİK SIRASI ÖNEMLİ!
