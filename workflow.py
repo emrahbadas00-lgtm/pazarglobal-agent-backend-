@@ -436,15 +436,15 @@ def _build_description_suggestion(draft: DraftState) -> str:
 # Native function tool definitions (plain Python async functions)
 @function_tool
 async def clean_price_tool(price_text: Optional[str] = None) -> Dict[str, Optional[int]]:
-    """Fiyat metnini temizleyip sayıya çevirir.
-
+    """,
+        tools=[search_listings_tool, market_price_tool],
     Args:
         price_text: Temizlenecek fiyat metni
-
+        
     Returns:
-        {"price": Temizlenmiş fiyat değeri (int veya None)}
-    """
-    return {"price": clean_price(price_text) if price_text else None}
+        Temizlenmiş fiyat değeri (int veya None)
+    """,
+        tools=[search_listings_tool, market_price_tool],
 
 @function_tool
 async def get_wallet_balance_tool(user_id: Optional[str] = None) -> Dict[str, Any]:
@@ -1954,6 +1954,7 @@ When user asks for price estimate: "bu ürünün fiyatı ne olmalı", "fiyat ön
 - If market_price_tool returns error (no similar products) → Only show site average
 - Always explain which data source is more reliable
 - Use similarity_threshold=0.5 for market_price_tool""",
+    model="gpt-4o-mini",
     tools=[search_listings_tool, market_price_tool],
     model_settings=ModelSettings(
         store=True
