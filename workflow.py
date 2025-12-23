@@ -298,67 +298,29 @@ class DraftState:
             self.merge_images([str(img) for img in update.get("images") if img])
 
     def as_preview_text(self) -> str:
-        """Render a rich preview with enhanced title and description."""
-        lines: List[str] = ["━━━━━━━━━━━━━━━━━━━━"]
-        lines.append("📝 **İlan Önizleme**")
-        lines.append("━━━━━━━━━━━━━━━━━━━━\n")
-        
-        # Başlık (kalın)
+        """Render a deterministic preview string for user confirmation."""
+        lines: List[str] = ["📝 İlan Taslağı (LLM-free FSM)"]
         if self.title:
-            lines.append(f"**{self.title}**\n")
-        
-        # Fiyat (büyük, vurgulu)
+            lines.append(f"Başlık: {self.title}")
+        if self.description:
+            lines.append(f"Açıklama: {self.description}")
         if self.price is not None:
-            lines.append(f"💰 **{self.price:,} TL**\n")
-        
-        # Temel bilgiler (kompakt)
-        info_parts = []
+            lines.append(f"Fiyat: {self.price} TL")
         if self.category:
-            info_parts.append(f"📂 {self.category}")
+            lines.append(f"Kategori: {self.category}")
         if self.condition:
             display_condition = _condition_display(self.condition) or self.condition
-            info_parts.append(f"📦 {display_condition}")
+            lines.append(f"Durum: {display_condition}")
         location_display = self.location or "Türkiye"
-        info_parts.append(f"📍 {location_display}")
-        if info_parts:
-            lines.append(" | ".join(info_parts) + "\n")
-        
-        # Açıklama (formatlanmış)
-        if self.description:
-            lines.append("📄 **Açıklama:**")
-            # İlk 200 karakter önizleme
-            desc_preview = self.description[:200]
-            if len(self.description) > 200:
-                desc_preview += "..."
-            lines.append(desc_preview + "\n")
-        
-        # Özellikler (kategoriye göre)
+        lines.append(f"Lokasyon: {location_display}")
+        stock_display = self.stock if self.stock is not None else 1
+        lines.append(f"Stok: {stock_display}")
         if self.metadata:
-            lines.append("⚙️ **Özellikler:**")
-            # Kategori-specific formatting
-            if self.category == "Otomotiv":
-                if self.metadata.get("year"):
-                    lines.append(f"  • Yıl: {self.metadata['year']}")
-                if self.metadata.get("mileage"):
-                    lines.append(f"  • Km: {self.metadata['mileage']:,}")
-                if self.metadata.get("fuel_type"):
-                    lines.append(f"  • Yakıt: {self.metadata['fuel_type']}")
-            else:
-                # Genel metadata
-                for k, v in list(self.metadata.items())[:5]:  # Max 5 özellik
-                    lines.append(f"  • {k}: {v}")
-            lines.append("")
-        
-        # Fotoğraflar
+            meta_pairs = [f"{k}: {v}" for k, v in self.metadata.items()]
+            lines.append("Özellikler: " + ", ".join(meta_pairs))
         if self.images:
-            lines.append(f"📸 **{len(self.images)} fotoğraf eklendi**\n")
-        
-        # Aksiyon butonları
-        lines.append("━━━━━━━━━━━━━━━━━━━━")
-        lines.append("✅ **ONAYLA** → İlanı yayınla")
-        lines.append("✏️ **DÜZELT** → Değişiklik yap")
-        lines.append("❌ **İPTAL** → Taslağı sil")
-        
+            lines.append(f"Fotoğraf: {len(self.images)} adet eklendi")
+        lines.append("✅ Onayla / ✏️ Düzelt")
         return "\n".join(lines)
 
     def publish_payload(self) -> Dict[str, Any]:
@@ -2471,78 +2433,6 @@ async def db_clear_active_draft(user_id: Optional[str]) -> None:
     USER_SAFE_MEDIA_STORE.pop(user_id, None)
 
 
-async def enhance_draft_with_llm(
-    draft: DraftState,
-    vision_product: Optional[Dict[str, Any]] = None
-) -> Dict[str, str]:
-    """
-    LLM zenginleştirme: Minimum bilgileri alıp profesyonel başlık ve açıklama oluştur.
-    
-    Args:
-        draft: Mevcut taslak (minimum bilgiler)
-        vision_product: Vision analizi sonuçları
-    
-    Returns:
-        {"title": "...", "description": "..."}
-    """
-    vision_ctx = vision_product or draft.vision_product or {}
-    
-    # Mevcut bilgileri topla
-    product_info = {
-        "title": draft.title or "Ürün",
-        "category": draft.category or "Genel",
-        "condition": draft.condition or "used",
-        "price": draft.price,
-        "metadata": draft.metadata or {},
-        "vision": vision_ctx
-    }
-    
-    system_prompt = (
-        "Sen PazarGlobal için profesyonel ilan başlıkları ve açıklamaları yazan bir copywriter'sın.\n"
-        "Görevin: Kullanıcıdan aldığın minimum bilgileri alıp, çekici ve detaylı bir ilan metni oluşturmak.\n\n"
-        "KURALLAR:\n"
-        "1. Başlık: 60-80 karakter, SEO-friendly, önemli özellikler içermeli\n"
-        "2. Açıklama: Emoji kullan, madde işaretli liste yap, profesyonel ama samimi ton\n"
-        "3. Abartma! Gerçekçi kal, yalan söyleme\n"
-        "4. Kategori-specific detaylar ekle (Otomotiv için km/yıl, Elektronik için özellkler)\n"
-        "5. Türkçe dilbilgisi ve imla kurallarına uy\n\n"
-        "JSON formatında döndür: {\"title\": \"...\", \"description\": \"...\"}\n"
-        "Açıklamada \\n karakteri kullan (gerçek satır sonu için)."
-    )
-    
-    user_prompt = (
-        f"Ürün bilgileri: {json.dumps(product_info, ensure_ascii=False, indent=2)}\n\n"
-        "Bu bilgilerden profesyonel bir ilan başlığı ve açıklaması oluştur.\n"
-        "Başlık kısa ve çarpıcı, açıklama detaylı ve ikna edici olsun."
-    )
-    
-    try:
-        resp = await client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.7,  # Yaratıcılık için biraz yüksek
-            response_format={"type": "json_object"}
-        )
-        
-        content = resp.choices[0].message.content or "{}"
-        parsed = json.loads(content)
-        
-        return {
-            "title": parsed.get("title", draft.title or "Ürün"),
-            "description": parsed.get("description", draft.description or "")
-        }
-    except Exception as e:
-        print(f"❌ LLM enhancement error: {e}")
-        # Fallback: Basit template
-        return {
-            "title": draft.title or "Ürün",
-            "description": draft.description or "İletişim için mesaj atın."
-        }
-
-
 async def generate_structured_draft_update(
     user_text: str,
     vision_product: Optional[Dict[str, Any]],
@@ -2555,7 +2445,6 @@ async def generate_structured_draft_update(
     system_prompt = (
         "You are a deterministic field extractor for a marketplace draft. "
         "Return ONLY JSON with keys: title, description, price, category, condition, location, metadata (object), images (array). "
-        "Extract BASIC info only (short title, category, price). Do NOT create long descriptions yet. "
         "Never call tools. Keep it concise and do not include extra keys."
     )
 
@@ -2609,40 +2498,23 @@ async def handle_listing_fsm(
     draft.merge_images(safe_media_paths)
 
     if intent in {"create_listing", "update_listing_draft"}:
-        # 1. Extract basic fields
         update = await generate_structured_draft_update(user_text, vision_product, draft)
         if update.get("price") is not None:
             update["price"] = _normalize_price_value(update.get("price"))
         draft.apply_update(update)
 
-        # 2. LLM Enhancement: Zenginleştir
-        # Eğer başlık çok kısa veya açıklama yok ise, LLM ile zenginleştir
-        needs_enhancement = (
-            (not draft.title or len(draft.title) < 20) or
-            (not draft.description or len(draft.description) < 50)
-        )
-        
-        if needs_enhancement:
-            enhanced = await enhance_draft_with_llm(draft, vision_product)
-            if enhanced.get("title"):
-                draft.title = enhanced["title"]
-            if enhanced.get("description"):
-                draft.description = enhanced["description"]
-
-        # Optional: user explicitly asked for description improvement
+        # Optional: user asked for a richer description suggestion
         if _wants_description_suggestion(user_text):
             draft.description = _build_description_suggestion(draft)
 
-        # 3. Ensure defaults for persisted draft
+        # Ensure defaults for persisted draft
         draft.stock = draft.stock if draft.stock is not None else 1
         draft.metadata = _build_metadata(draft, vision_product)
         draft.state = ListingState.PREVIEW if intent == "create_listing" else ListingState.EDIT
         await db_upsert_active_draft(draft)
-        
-        # 4. Rich preview
         preview = draft.as_preview_text()
         if _wants_description_suggestion(user_text):
-            preview += "\n\n💡 Açıklamayı özelleştirmek için: 'açıklamayı değiştir' yazın."
+            preview += "\n\n✏️ Açıklamayı değiştirmek için: 'açıklamayı ... yap' yazabilirsiniz."
         return {
             "response": preview,
             "intent": "create_listing",
