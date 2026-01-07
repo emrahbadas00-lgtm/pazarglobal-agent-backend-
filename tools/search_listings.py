@@ -336,19 +336,11 @@ async def search_listings(
         # Get total count from Content-Range header if available
         total_count = len(data)
         content_range = resp.headers.get("content-range")
-        print(f"🔍 DEBUG - Content-Range header: {content_range}")
         if content_range:
             # Format: "0-4/6" means results 0-4 out of total 6
             parts = content_range.split("/")
             if len(parts) == 2 and parts[1].isdigit():
                 total_count = int(parts[1])
-                print(f"✅ Total count from header: {total_count}")
-            else:
-                print(f"⚠️ Could not parse Content-Range: {content_range}")
-        else:
-            print(f"⚠️ No Content-Range header, using count: {total_count}")
-        
-        print(f"📊 Returning: count={len(data)}, total={total_count}")
         
         return {
             "success": True,
