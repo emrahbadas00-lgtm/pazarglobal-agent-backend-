@@ -288,7 +288,7 @@ class SearchComposerAgent:
                     "condition": listing.condition,
                     "category": listing.category,
                     "description": (listing.description or "")[:160],
-                    "signed_images": listing.signed_images,
+                    # "signed_images": listing.signed_images,  # Removed: Twilio can't access signed URLs
                     "user_name": listing.owner_name,
                     "user_phone": listing.owner_phone,
                 }
