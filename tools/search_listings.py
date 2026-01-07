@@ -2,6 +2,7 @@
 
 import os
 import json
+import re
 from typing import Any, Dict, Optional, List, Iterable, Tuple
 
 import httpx
@@ -61,6 +62,20 @@ async def generate_signed_urls(paths: List[str], expires_in: int = 3600) -> Dict
         return {}
 
 
+def _extract_keyword_tokens(text: str, *, limit: int = 4) -> List[str]:
+    tokens = [tok.lower() for tok in re.findall(r"[0-9a-zA-ZçğıöşüÇĞİÖŞÜ]+", text or "")]
+    filtered: List[str] = []
+    for tok in tokens:
+        if len(tok) < 3:
+            continue
+        if tok in filtered:
+            continue
+        filtered.append(tok)
+        if len(filtered) >= limit:
+            break
+    return filtered
+
+
 async def search_listings(
     query: Optional[str] = None,
     category: Optional[str] = None,
@@ -72,6 +87,7 @@ async def search_listings(
     metadata_type: Optional[str] = None,
     room_count: Optional[str] = None,  # NEW: Direct metadata filter (e.g., "3+1")
     property_type: Optional[str] = None,  # NEW: Direct metadata filter (e.g., "dubleks")
+    search_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Supabase'den ilan arama.
@@ -132,28 +148,29 @@ async def search_listings(
     params: Dict[str, str] = {
         "limit": str(limit),
         "order": "created_at.desc",
-        "status": "eq.active",  # Default: Only show active listings
+        "status": "eq.active",
         "select": select_fields,
     }
+
+    or_segments: List[str] = []
+
+    def _add_or_clause(clause: str) -> None:
+        if clause and clause not in or_segments:
+            or_segments.append(clause)
     
     # Filtreler - Supabase PostgREST syntax
     if query:
-        # Synonym expansion for generic terms
         query_lower = query.lower()
-        
-        # SMART SEARCH: Search in multiple fields (title, description, category, location)
-        # This makes search more flexible - no need to specify exact category!
-        if query_lower in ["araba", "otomobil", "araç", "oto"]:
-            # Generic vehicle search: Check category and metadata
-            if not category:
-                params["or"] = f"(title.ilike.*{query}*,description.ilike.*{query}*,category.ilike.*otom*)"
-        elif query_lower in ["ev", "daire", "emlak", "kiralık", "satılık"]:
-            # Real estate search: Check multiple fields
-            if not category:
-                params["or"] = f"(title.ilike.*{query}*,description.ilike.*{query}*,category.ilike.*emlak*,location.ilike.*{query}*)"
-        else:
-            # Normal search: title, description, category, location (BROADEST SEARCH)
-            params["or"] = f"(title.ilike.*{query}*,description.ilike.*{query}*,category.ilike.*{query}*,location.ilike.*{query}*)"
+        vehicle_keywords = {"araba", "otomobil", "araç", "arac", "oto", "vasita", "vasıta"}
+        real_estate_keywords = {"ev", "daire", "emlak", "kiralık", "satılık", "villa"}
+
+        if not category and query_lower in vehicle_keywords:
+            category = "Otomotiv"
+        if not category and query_lower in real_estate_keywords:
+            category = "Emlak"
+
+        for field in ("title", "description", "category", "location"):
+            _add_or_clause(f"{field}.ilike.*{query}*")
     
     if category:
         # Category normalization - case insensitive partial match
@@ -169,15 +186,13 @@ async def search_listings(
         # Use ilike for partial match (e.g., "Bursa" matches "Bursa / Nilüfer, 23 Nisan...")
         params["location"] = f"ilike.*{location}*"
     
+    price_filters: List[str] = []
     if min_price is not None:
-        params["price"] = f"gte.{min_price}"
-    
+        price_filters.append(f"price.gte.{min_price}")
     if max_price is not None:
-        if "price" in params:
-            # Hem min hem max varsa
-            params["price"] = f"gte.{min_price}&price=lte.{max_price}"
-        else:
-            params["price"] = f"lte.{max_price}"
+        price_filters.append(f"price.lte.{max_price}")
+    if price_filters:
+        params["and"] = f"({','.join(price_filters)})"
     
     if metadata_type:
         # Filter by metadata->type field (JSONB query)
@@ -188,14 +203,16 @@ async def search_listings(
         params["metadata->>room_count"] = f"eq.{room_count}"
     
     if property_type:
-        # Search in BOTH metadata AND title/description (some listings have type in title, not metadata)
-        # Example: "Dubleks" in title but property_type="daire" in metadata
-        if query:
-            # If query exists, combine with OR
-            params["or"] = f"(title.ilike.*{property_type}*,description.ilike.*{property_type}*,metadata->>property_type.ilike.*{property_type}*)" + "," + params.get("or", "")
-        else:
-            # No query, just search property_type in title, description, and metadata
-            params["or"] = f"(title.ilike.*{property_type}*,description.ilike.*{property_type}*,metadata->>property_type.ilike.*{property_type}*)"
+        _add_or_clause(f"title.ilike.*{property_type}*")
+        _add_or_clause(f"description.ilike.*{property_type}*")
+        _add_or_clause(f"metadata->>property_type.ilike.*{property_type}*")
+
+    if search_text:
+        for token in _extract_keyword_tokens(search_text):
+            _add_or_clause(f"metadata->>keywords_text.ilike.*{token}*")
+
+    if or_segments:
+        params["or"] = f"({','.join(or_segments)})"
 
     headers = {
         "apikey": SUPABASE_SERVICE_KEY,

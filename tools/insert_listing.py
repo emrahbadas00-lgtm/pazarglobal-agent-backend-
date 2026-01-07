@@ -7,6 +7,8 @@ from typing import Any, Dict, Optional, List, cast
 import httpx
 from .suggest_category import suggest_category
 from .wallet_tools import deduct_credits
+from services.category_library import normalize_category_id
+from services.metadata_keywords import generate_listing_keywords
 
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -113,8 +115,22 @@ async def insert_listing(
             metadata["original_category"] = original_category
             metadata["category_corrected"] = True
 
-    # Align category with metadata (e.g., vehicle => Otomotiv)
+    # Align category with metadata (e.g., vehicle => Otomotiv) and canonical IDs
     category = normalize_category_with_metadata(category, metadata)
+    category = normalize_category_id(category) or category or "Diğer"
+
+    normalized_metadata: Dict[str, Any] = metadata.copy() if isinstance(metadata, dict) else {}
+
+    keyword_payload = await generate_listing_keywords(
+        title=title,
+        category=category or "Diğer",
+        description=description or "",
+        condition=condition or "",
+    )
+    if keyword_payload.get("keywords"):
+        normalized_metadata["keywords"] = keyword_payload["keywords"]
+    if keyword_payload.get("keywords_text"):
+        normalized_metadata["keywords_text"] = keyword_payload["keywords_text"]
 
     # Only select id to keep response small but reliable (needed for wallet deduction reference)
     url = f"{SUPABASE_URL}/rest/v1/listings?select=id"
@@ -129,7 +145,7 @@ async def insert_listing(
         "location": location,
         "stock": stock,
         "status": "active",
-        "metadata": metadata,
+        "metadata": normalized_metadata or None,
         "user_name": user_name,  # Add user_name to payload
         "user_phone": user_phone,  # Add user_phone to payload
     }

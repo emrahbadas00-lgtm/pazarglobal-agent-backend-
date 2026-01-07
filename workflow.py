@@ -59,6 +59,7 @@ TODO: Implement after Phase 3 (Listing Management) is complete.
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownArgumentType=false, reportMissingParameterType=false, reportMissingTypeArgument=false
 import os
 import re
+import time
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -89,6 +90,7 @@ from tools.wallet_tools import (
     renew_listing
 )
 from tools.admin_tools import admin_add_credits, admin_grant_premium
+from services.listing_search import SearchComposerAgent
 
 
 UpdateListingFn = Callable[..., Awaitable[Dict[str, Any]]]
@@ -210,6 +212,153 @@ def _extract_listing_number(text: str) -> Optional[int]:
         except Exception:
             continue
     return None
+
+
+def _get_search_session(user_key: str) -> Optional[Dict[str, Any]]:
+    session = USER_SEARCH_SESSION_STORE.get(user_key)
+    if not session:
+        return None
+    timestamp = session.get("timestamp", 0)
+    if time.time() - float(timestamp) > SEARCH_SESSION_TTL_SECONDS:
+        USER_SEARCH_SESSION_STORE.pop(user_key, None)
+        return None
+    return session
+
+
+def _store_search_session(user_key: str, session: Dict[str, Any]) -> None:
+    session["timestamp"] = time.time()
+    USER_SEARCH_SESSION_STORE[user_key] = session
+
+
+def _clear_search_session(user_key: str) -> None:
+    USER_SEARCH_SESSION_STORE.pop(user_key, None)
+
+
+SHOW_MORE_KEYWORDS = (
+    "daha fazla",
+    "devamını",
+    "devamini",
+    "devam et",
+    "diğer ilan",
+    "diger ilan",
+    "hepsini",
+    "tüm ilan",
+    "tum ilan",
+)
+
+
+def _is_show_more_request(text: str) -> bool:
+    lowered = (text or "").strip().lower()
+    return any(keyword in lowered for keyword in SHOW_MORE_KEYWORDS)
+
+
+async def _execute_new_search(user_key: str, query_text: str) -> Dict[str, Any]:
+    composer_result = await search_composer_agent.orchestrate_search(user_message=query_text)
+    if composer_result.get("success"):
+        session_payload = {
+            "query": query_text,
+            "category": composer_result.get("category"),
+            "search_terms": composer_result.get("search_terms"),
+            "listings": composer_result.get("listings_full") or [],
+            "total": composer_result.get("total", 0),
+            "cursor": len(composer_result.get("listings", [])),
+        }
+        _store_search_session(user_key, session_payload)
+        USER_LAST_SEARCH_RESULTS_STORE[user_key] = composer_result.get("cache_payload") or []
+    else:
+        _clear_search_session(user_key)
+    return composer_result
+
+
+async def _fetch_additional_results(user_key: str, session: Dict[str, Any]) -> bool:
+    original_query = session.get("query")
+    if not original_query:
+        return False
+    current_count = len(session.get("listings") or [])
+    total = session.get("total", current_count)
+    if current_count >= total:
+        return False
+    new_limit = min(total, current_count + search_composer_agent.preview_limit * 2)
+    composer_result = await search_composer_agent.orchestrate_search(
+        user_message=original_query,
+        limit=new_limit,
+    )
+    if not composer_result.get("success"):
+        return False
+    session["listings"] = composer_result.get("listings_full") or []
+    session["total"] = composer_result.get("total", total)
+    session["category"] = composer_result.get("category") or session.get("category")
+    USER_LAST_SEARCH_RESULTS_STORE[user_key] = composer_result.get("cache_payload") or []
+    _store_search_session(user_key, session)
+    return True
+
+
+async def _build_show_more_response(user_key: str, session: Dict[str, Any]) -> Dict[str, Any]:
+    listings: List[Any] = session.get("listings") or []
+    cursor = int(session.get("cursor") or 0)
+    chunk = listings[cursor: cursor + search_composer_agent.preview_limit]
+    if not chunk:
+        fetched = await _fetch_additional_results(user_key, session)
+        if fetched:
+            listings = session.get("listings") or []
+            chunk = listings[cursor: cursor + search_composer_agent.preview_limit]
+    if not chunk:
+        return {
+            "response": "Gösterilecek başka ilan yok. Yeni bir arama yapmak ister misin?",
+            "intent": "search_product",
+            "success": False,
+        }
+
+    start_index = cursor + 1
+    new_cursor = cursor + len(chunk)
+    session["cursor"] = new_cursor
+    _store_search_session(user_key, session)
+
+    total = session.get("total", len(listings))
+    cache_payload = search_composer_agent.build_cache_payload(
+        listings[: search_composer_agent.fetch_limit]
+    )
+    USER_LAST_SEARCH_RESULTS_STORE[user_key] = cache_payload
+
+    message = search_composer_agent.format_preview_chunk(
+        chunk,
+        total=total,
+        start_index=start_index,
+        original_query=session.get("query", ""),
+        category_label=session.get("category"),
+        suggest_more=total > new_cursor,
+        cache_payload=cache_payload,
+    )
+    return {
+        "response": message,
+        "intent": "search_product",
+        "success": True,
+    }
+
+
+async def _handle_search_intent(user_key: str, user_text: str) -> Dict[str, Any]:
+    if _is_show_more_request(user_text):
+        session = _get_search_session(user_key)
+        if not session:
+            return {
+                "response": "Önce bir arama yapalım. Hangi ürünü arıyorsun?",
+                "intent": "search_product",
+                "success": False,
+            }
+        return await _build_show_more_response(user_key, session)
+
+    composer_result = await _execute_new_search(user_key, user_text)
+    if composer_result.get("success"):
+        return {
+            "response": composer_result.get("message", ""),
+            "intent": "search_product",
+            "success": True,
+        }
+    return {
+        "response": composer_result.get("message") or "İlan bulamadım. Başka bir kelime deneyelim mi?",
+        "intent": "search_product",
+        "success": False,
+    }
 
 # Native function tool definitions (plain Python async functions)
 @function_tool
@@ -440,6 +589,7 @@ async def search_listings_tool(
     metadata_type: Optional[str] = None,
     room_count: Optional[str] = None,
     property_type: Optional[str] = None,
+    search_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Supabase'den ilan arar.
@@ -465,6 +615,7 @@ async def search_listings_tool(
         metadata_type=metadata_type,
         room_count=room_count,
         property_type=property_type,
+        search_text=search_text,
     )
 
     # Persist last search results per user so follow-ups like "1 nolu ilan" stay deterministic
@@ -2025,6 +2176,12 @@ USER_LAST_SEARCH_RESULTS_STORE: Dict[str, List[Dict[str, Any]]] = {}
 # Format: {user_id: listing_id}
 USER_ACTIVE_LISTING_STORE: Dict[str, str] = {}
 
+# Session store for listing search pagination contexts
+USER_SEARCH_SESSION_STORE: Dict[str, Dict[str, Any]] = {}
+
+SEARCH_SESSION_TTL_SECONDS = 300
+search_composer_agent = SearchComposerAgent(preview_limit=5, fetch_limit=30)
+
 
 # Main workflow runner
 async def run_workflow(workflow_input: WorkflowInput):
@@ -2664,14 +2821,10 @@ async def run_workflow(workflow_input: WorkflowInput):
                 })
             )
         elif intent == "search_product":
-            result = await Runner.run(
-                searchagent,
-                input=[*conversation_history],
-                run_config=RunConfig(trace_metadata={
-                    "__trace_source__": "agent-builder",
-                    "workflow_id": "wf_691884cc7e6081908974fe06852942af0249d08cf5054fdb"
-                })
-            )
+            composer_payload = await _handle_search_intent(user_id_key, raw_user_text_full)
+            composer_payload.setdefault("safe_media_paths", safe_media_paths if 'safe_media_paths' in locals() else [])
+            composer_payload.setdefault("blocked_media_paths", blocked_media_paths if 'blocked_media_paths' in locals() else [])
+            return composer_payload
         elif intent == "small_talk":
             result = await Runner.run(
                 smalltalkagent,

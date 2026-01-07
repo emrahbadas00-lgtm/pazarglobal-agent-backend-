@@ -8,6 +8,7 @@ httpx>=0.26.0
 # OpenAI Agents SDK (includes OpenAI client)
 openai-agents>=0.1.0
 openai>=1.54.0
+loguru>=0.7.2
 
 # Guardrails
 openai-guardrails>=0.1.0

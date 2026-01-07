@@ -7,6 +7,8 @@ Use this tool to validate or suggest categories for listings
 
 from typing import Any, Dict, Optional
 
+from services.category_library import classify_category
+
 
 CATEGORY_KEYWORDS = {
     "Otomotiv": ["araba", "araç", "otomobil", "motor", "kamyon", "motorsiklet", "BMW", "Mercedes", "Volkswagen", "Renault", "Toyota", "Honda", "lastik", "aksesuar"],
@@ -64,8 +66,17 @@ async def suggest_category(
             scores[category] = score
             matched_keywords[category] = matches
     
-    # No matches found
+    # No matches found – fall back to deterministic classifier
     if not scores:
+        deterministic = classify_category(text)
+        if deterministic:
+            return {
+                "success": True,
+                "suggested_category": deterministic,
+                "confidence": 0.6,
+                "matches": [],
+                "message": "Deterministic eşleştirme kullanıldı.",
+            }
         return {
             "success": True,
             "suggested_category": None,
