@@ -2608,7 +2608,9 @@ async def run_workflow(workflow_input: WorkflowInput):
                 signed_images = item.get("signed_images")
                 photos: List[str] = []
                 if isinstance(signed_images, list):
-                    photos = [str(u).strip() for u in signed_images if isinstance(u, str) and u.strip()][:3]
+                    for path in signed_images[:3]:
+                        if isinstance(path, str) and path.strip():
+                            photos.append(_resolve_public_image_url(path.strip()))
 
                 lines: List[str] = [
                     title,
