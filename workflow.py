@@ -196,11 +196,12 @@ def _extract_listing_number(text: str) -> Optional[int]:
     """Best-effort parse for Turkish patterns like '1 nolu ilan', 'ilan #2', '2 numaralı ilan'."""
     if not text:
         return None
-    lowered = text.lower()
+    lowered = text.casefold()
     patterns = [
-        r"\b(\d{1,3})\s*(?:nolu|no\.?|numaralı)\s*ilan\b",
-        r"\bilan\s*#?\s*(\d{1,3})\b",
-        r"\b#\s*(\d{1,3})\b",
+        r"\b(\d{1,3})\s*(?:nolu|no\.?|numaral[ıi])\s*ilan(?:ın|in|ı|i|u|ü|un|nun)?\b",
+        r"\b(\d{1,3})\s*(?:nolu|no\.?|numara|numaral[ıi])\b",
+        r"\bilan(?:ın|in|ı|i|u|ü)?\s*(?:#|numara|no)?\s*(\d{1,3})\b",
+        r"#\s*(\d{1,3})\b",
     ]
     for pat in patterns:
         m = re.search(pat, lowered)
