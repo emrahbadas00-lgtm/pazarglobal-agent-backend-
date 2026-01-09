@@ -252,6 +252,104 @@ def _is_show_more_request(text: str) -> bool:
     return any(keyword in lowered for keyword in SHOW_MORE_KEYWORDS)
 
 
+DETAIL_COMMAND_HINTS = (
+    "göster",
+    "goster",
+    "detay",
+    "detayi",
+    "detayini",
+    "detayını",
+    "incele",
+    "inceleyelim",
+    "bilgi",
+    "bilgisi",
+    "ayrıntı",
+    "ayrinti",
+)
+
+
+def _extract_listing_detail_request(text: str) -> Optional[int]:
+    if not text:
+        return None
+    number = _extract_listing_number(text)
+    if number is None:
+        return None
+    lowered = text.lower()
+    if any(token in lowered for token in DETAIL_COMMAND_HINTS) or "ilan" in lowered:
+        return number
+    return None
+
+
+def _hydrate_cached_results(user_key: str) -> List[Dict[str, Any]]:
+    cached = USER_LAST_SEARCH_RESULTS_STORE.get(user_key) or []
+    if cached:
+        return cached
+    session = _get_search_session(user_key)
+    if session:
+        listings = session.get("listings") or []
+        if listings:
+            payload = search_composer_agent.build_cache_payload(
+                listings[: search_composer_agent.fetch_limit]
+            )
+            USER_LAST_SEARCH_RESULTS_STORE[user_key] = payload
+            return payload
+    return []
+
+
+def _format_listing_detail_message(index: int, listing: Dict[str, Any]) -> str:
+    title = listing.get("title") or "İlan detayları"
+    price_text = SearchComposerAgent._format_price(listing.get("price"))  # type: ignore[attr-defined]
+    location = listing.get("location") or "Konum belirtilmemiş"
+    category = listing.get("category") or "Kategori yok"
+    owner_bits: List[str] = []
+    if listing.get("user_name"):
+        owner_bits.append(str(listing.get("user_name")))
+    if listing.get("user_phone"):
+        owner_bits.append(str(listing.get("user_phone")))
+    owner_line = f"👤 {' | '.join(owner_bits)}" if owner_bits else "👤 Satıcı bilgisi mevcut değil"
+    description = (listing.get("description") or "").strip()
+    lines = [
+        f"{index}️⃣ {title}",
+        f"💰 {price_text} | 📍 {location} | 🏷️ {category}",
+        owner_line,
+    ]
+    if description:
+        lines.append("")
+        lines.append(f"Açıklama: {description}")
+    lines.append("")
+    lines.append("Bu ilanda işlem yapmak için 'bu ilanı sil' veya 'güncelle' diyebilirsin.")
+    return "\n".join(lines)
+
+
+async def _build_listing_detail_response(user_key: str, listing_index: int) -> Dict[str, Any]:
+    cached = _hydrate_cached_results(user_key)
+    if not cached:
+        return {
+            "response": "Önce bir arama sonucu görelim. Hangi ürünü arıyorsun?",
+            "intent": "search_product",
+            "success": False,
+        }
+    if listing_index < 1 or listing_index > len(cached):
+        return {
+            "response": f"Yalnızca {len(cached)} ilan var. 1 ile {len(cached)} arasında bir numara söyleyebilirsin.",
+            "intent": "search_product",
+            "success": False,
+        }
+    listing = cached[listing_index - 1]
+    listing_id = listing.get("id")
+    if listing_id and _is_uuid(str(listing_id)):
+        USER_ACTIVE_LISTING_STORE[user_key] = str(listing_id)
+        state = resolve_conversation_state()
+        if isinstance(state, dict):
+            state["active_listing_id"] = str(listing_id)
+    message = _format_listing_detail_message(listing_index, listing)
+    return {
+        "response": message,
+        "intent": "search_product",
+        "success": True,
+    }
+
+
 async def _execute_new_search(user_key: str, query_text: str) -> Dict[str, Any]:
     composer_result = await search_composer_agent.orchestrate_search(user_message=query_text)
     if composer_result.get("success"):
@@ -337,6 +435,9 @@ async def _build_show_more_response(user_key: str, session: Dict[str, Any]) -> D
 
 
 async def _handle_search_intent(user_key: str, user_text: str) -> Dict[str, Any]:
+    detail_request = _extract_listing_detail_request(user_text)
+    if detail_request is not None:
+        return await _build_listing_detail_response(user_key, detail_request)
     if _is_show_more_request(user_text):
         session = _get_search_session(user_key)
         if not session:
